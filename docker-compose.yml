@@ -1,0 +1,131 @@
+name: slack-suite-local
+
+services:
+  # --------------------------------------------------------------------------
+  # 1. POSTGRESQL 18 (ORIGIN DATABASE + NATIVE KV + TRANSACTIONAL OUTBOX)
+  # --------------------------------------------------------------------------
+  postgres-origin:
+    image: postgres:18-alpine
+    container_name: suite-pg18-origin
+    restart: unless-stopped
+    command:
+      - "postgres"
+      - "-c"
+      - "wal_level=logical"
+      - "-c"
+      - "max_replication_slots=10"
+      - "-c"
+      - "max_wal_senders=10"
+      - "-c"
+      - "shared_buffers=256MB"
+    environment:
+      POSTGRES_USER: suite_user
+      POSTGRES_PASSWORD: suite_local_password
+      POSTGRES_DB: slack_suite
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg18_data:/var/lib/postgresql/data
+      - ./packages/db/migrations/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U suite_user -d slack_suite"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  # --------------------------------------------------------------------------
+  # 2. PGCACHE PROXY (CDC WIRE-COMPATIBLE CACHE)
+  # --------------------------------------------------------------------------
+  pgcache:
+    image: pgcache/pgcache:latest
+    container_name: suite-pgcache
+    restart: unless-stopped
+    depends_on:
+      postgres-origin:
+        condition: service_healthy
+    environment:
+      PGCACHE_LISTEN_ADDR: "0.0.0.0:5433"
+      PGCACHE_ORIGIN_HOST: "postgres-origin"
+      PGCACHE_ORIGIN_PORT: "5432"
+      PGCACHE_ORIGIN_USER: "suite_user"
+      PGCACHE_ORIGIN_PASSWORD: "suite_local_password"
+      PGCACHE_ORIGIN_DB: "slack_suite"
+      PGCACHE_CDC_PUBLICATION: "pgcache_suite_pub"
+      PGCACHE_CDC_SLOT: "pgcache_suite_slot"
+    ports:
+      - "5433:5433"
+
+  # --------------------------------------------------------------------------
+  # 3. APPS (SECRET, QUEUE, TODO)
+  # --------------------------------------------------------------------------
+  secret-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_NAME: secret-app
+    container_name: suite-secret-app
+    depends_on:
+      postgres-origin:
+        condition: service_healthy
+    environment: &common-env
+      PORT: "8080"
+      DATABASE_ORIGIN_URL: "postgres://suite_user:suite_local_password@postgres-origin:5432/slack_suite"
+      PGCACHE_URL: "postgres://suite_user:suite_local_password@pgcache:5433/slack_suite"
+      MASTER_ENCRYPTION_KEY_HEX: "${MASTER_ENCRYPTION_KEY_HEX:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}"
+      SECRET_APP_SIGNING_SECRET: "${SECRET_APP_SIGNING_SECRET:-dev_secret_signing_secret}"
+      QUEUE_APP_SIGNING_SECRET: "${QUEUE_APP_SIGNING_SECRET:-dev_queue_signing_secret}"
+      TODO_APP_SIGNING_SECRET: "${TODO_APP_SIGNING_SECRET:-dev_todo_signing_secret}"
+    ports:
+      - "8081:8080"
+
+  queue-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_NAME: queue-app
+    container_name: suite-queue-app
+    depends_on:
+      postgres-origin:
+        condition: service_healthy
+    environment:
+      <<: *common-env
+    ports:
+      - "8082:8080"
+
+  todo-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_NAME: todo-app
+    container_name: suite-todo-app
+    depends_on:
+      postgres-origin:
+        condition: service_healthy
+    environment:
+      <<: *common-env
+    ports:
+      - "8083:8080"
+
+  # --------------------------------------------------------------------------
+  # 4. TRANSACTIONAL OUTBOX WORKER
+  # --------------------------------------------------------------------------
+  outbox-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_NAME: outbox-worker
+    container_name: suite-outbox-worker
+    depends_on:
+      postgres-origin:
+        condition: service_healthy
+    environment:
+      <<: *common-env
+      WORKER_POLL_INTERVAL_MS: "250"
+      WORKER_BATCH_SIZE: "25"
+
+volumes:
+  pg18_data:
