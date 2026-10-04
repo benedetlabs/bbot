@@ -44,8 +44,11 @@ async function createSignedHeaders(
 Deno.test("queue-app: extractSlackUserId helper", () => {
   assertEquals(extractSlackUserId("<@U12345|leonardo>"), "U12345");
   assertEquals(extractSlackUserId("<@U99999>"), "U99999");
+  assertEquals(extractSlackUserId("<@U12345|john> AFK in meeting"), "U12345");
   assertEquals(extractSlackUserId("@U55555"), "U55555");
+  assertEquals(extractSlackUserId("@U55555 went to lunch"), "U55555");
   assertEquals(extractSlackUserId("U77777"), "U77777");
+  assertEquals(extractSlackUserId("U77777 AFK"), "U77777");
   assertEquals(extractSlackUserId(""), null);
 });
 
@@ -757,5 +760,115 @@ Deno.test("queue-app: in-place chat.update vs chat.postMessage sticky card sync"
     queuesRepo.joinQueue = origJoin;
     if (origEnv !== undefined) Deno.env.set("QUEUE_APP_BOT_TOKEN", origEnv);
     else Deno.env.delete("QUEUE_APP_BOT_TOKEN");
+  }
+});
+
+Deno.test("queue-app: /queue unknown subcommand returns ephemeral warning", async () => {
+  const body =
+    "command=%2Fqueue&text=invalidcmd&channel_id=C100&user_id=U10&team_id=T1";
+  const headers = await createSignedHeaders(body);
+
+  const req = new Request("http://localhost:8080/slack/commands", {
+    method: "POST",
+    headers,
+    body,
+  });
+
+  const res = await app.fetch(req);
+  assertEquals(res.status, 200);
+  const json = await res.json();
+  assertEquals(json.response_type, "ephemeral");
+  assertEquals(json.text.includes("Unknown subcommand `invalidcmd`"), true);
+});
+
+Deno.test("queue-app: interactions block action resolves queue by UUID", async () => {
+  let doneCalledWithQueueId = "";
+  const origRelease = queuesRepo.releaseLock;
+  const origGetQueueById = queuesRepo.getQueueById;
+  const origGetQueueState = queuesRepo.getQueueState;
+  const origFindWorkspace = workspacesRepo.findBySlackTeamId;
+
+  const testUuid = "a4387d81-8178-43f1-b9fa-f27318db9e01";
+
+  queuesRepo.getQueueById = ((id) => {
+    if (id === testUuid) {
+      return Promise.resolve({
+        id: testUuid,
+        workspace_id: "ws-1",
+        slack_channel_id: "C100",
+        name: "staging-deploy",
+        max_concurrency: 1,
+        max_hold_minutes: 45,
+        sticky_message_ts: "1700000000.999",
+        created_at: new Date(),
+      });
+    }
+    return Promise.resolve(null);
+  }) as typeof queuesRepo.getQueueById;
+
+  queuesRepo.getQueueState = ((queueId) => {
+    return Promise.resolve({
+      queue: {
+        id: queueId,
+        workspace_id: "ws-1",
+        slack_channel_id: "C100",
+        name: "staging-deploy",
+        max_concurrency: 1,
+        max_hold_minutes: 45,
+        sticky_message_ts: "1700000000.999",
+        created_at: new Date(),
+      },
+      activeHolders: [],
+      waitingLine: [],
+    });
+  }) as typeof queuesRepo.getQueueState;
+
+  workspacesRepo.findBySlackTeamId = (() => {
+    return Promise.resolve({
+      id: "ws-1",
+      slack_team_id: "T1",
+      slack_enterprise_id: null,
+      team_name: "testteam",
+      plan_tier: "free",
+      has_secret_audit_addon: false,
+      stripe_customer_id: null,
+      stripe_subscription_id: null,
+      billing_status: "active",
+      created_at: new Date(),
+      updated_at: new Date(),
+    });
+  }) as typeof workspacesRepo.findBySlackTeamId;
+
+  queuesRepo.releaseLock = ((params) => {
+    doneCalledWithQueueId = params.queueId;
+    return Promise.resolve({ status: "released", promotedEntry: null });
+  }) as typeof queuesRepo.releaseLock;
+
+  try {
+    const payload = {
+      type: "block_actions",
+      team: { id: "T1" },
+      user: { id: "U1" },
+      channel: { id: "C100" },
+      actions: [{ action_id: "queue_done_click", value: testUuid }],
+    };
+
+    const body = `payload=${encodeURIComponent(JSON.stringify(payload))}`;
+    const headers = await createSignedHeaders(body);
+
+    const req = new Request("http://localhost:8080/slack/interactions", {
+      method: "POST",
+      headers,
+      body,
+    });
+
+    const res = await app.fetch(req);
+    assertEquals(res.status, 200);
+    assertEquals(doneCalledWithQueueId, testUuid);
+  } finally {
+    queuesRepo.releaseLock = origRelease;
+    queuesRepo.getQueueById = origGetQueueById;
+    queuesRepo.getQueueState = origGetQueueState;
+    workspacesRepo.findBySlackTeamId = origFindWorkspace;
   }
 });

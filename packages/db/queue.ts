@@ -119,9 +119,20 @@ export const queuesRepo = {
     queueId: string,
     sql: Sql = getSqlRead(),
   ): Promise<QueueRow | null> {
-    const rows = await sql<QueueRow[]>`
-      SELECT * FROM queues WHERE id = ${queueId}::uuid LIMIT 1
-    `;
+    const isUuid =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        queueId,
+      );
+    if (!isUuid && !queueId.startsWith("queue-")) {
+      return null;
+    }
+    const rows = isUuid
+      ? await sql<QueueRow[]>`
+        SELECT * FROM queues WHERE id = ${queueId}::uuid LIMIT 1
+      `
+      : await sql<QueueRow[]>`
+        SELECT * FROM queues WHERE id = ${queueId} LIMIT 1
+      `;
     return rows[0] ?? null;
   },
 
@@ -369,6 +380,12 @@ export const queuesRepo = {
         });
         await cancelOutboxEvents(tx, {
           workspaceId: params.workspaceId,
+          eventType: "queue.timeout_warning",
+          filterPayloadKey: "entryId",
+          filterPayloadValue: activeEntry.id,
+        });
+        await cancelOutboxEvents(tx, {
+          workspaceId: params.workspaceId,
           eventType: "queue.auto_expire",
           filterPayloadKey: "entryId",
           filterPayloadValue: activeEntry.id,
@@ -550,6 +567,12 @@ export const queuesRepo = {
       });
       await cancelOutboxEvents(tx, {
         workspaceId: params.workspaceId,
+        eventType: "queue.timeout_warning",
+        filterPayloadKey: "entryId",
+        filterPayloadValue: currentEntry.id,
+      });
+      await cancelOutboxEvents(tx, {
+        workspaceId: params.workspaceId,
         eventType: "queue.auto_expire",
         filterPayloadKey: "entryId",
         filterPayloadValue: currentEntry.id,
@@ -647,6 +670,12 @@ export const queuesRepo = {
         await cancelOutboxEvents(tx, {
           workspaceId: params.workspaceId,
           eventType: "queue.check_expiration_warning",
+          filterPayloadKey: "entryId",
+          filterPayloadValue: target.id,
+        });
+        await cancelOutboxEvents(tx, {
+          workspaceId: params.workspaceId,
+          eventType: "queue.timeout_warning",
           filterPayloadKey: "entryId",
           filterPayloadValue: target.id,
         });
@@ -768,6 +797,7 @@ export const queuesRepo = {
       queueId: string;
       entryId: string;
       workspaceId: string;
+      checkTtl?: boolean;
     },
     sql: Sql = getSqlWrite(),
   ): Promise<AutoExpireResult> {
@@ -792,6 +822,15 @@ export const queuesRepo = {
 
       const expiredEntry = activeRows[0];
 
+      // If checkTtl is enabled and lock was extended, expires_at is in the future; do not auto-expire!
+      if (
+        params.checkTtl &&
+        expiredEntry.expires_at &&
+        expiredEntry.expires_at.getTime() > Date.now()
+      ) {
+        return { status: "already_handled" };
+      }
+
       const updated = await tx<QueueEntryRow[]>`
         UPDATE queue_entries
         SET status = 'expired',
@@ -799,6 +838,20 @@ export const queuesRepo = {
         WHERE id = ${expiredEntry.id}::uuid
         RETURNING *
       `;
+
+      // Cancel any remaining timeout warnings for this entry
+      await cancelOutboxEvents(tx, {
+        workspaceId: params.workspaceId,
+        eventType: "queue.check_expiration_warning",
+        filterPayloadKey: "entryId",
+        filterPayloadValue: expiredEntry.id,
+      });
+      await cancelOutboxEvents(tx, {
+        workspaceId: params.workspaceId,
+        eventType: "queue.timeout_warning",
+        filterPayloadKey: "entryId",
+        filterPayloadValue: expiredEntry.id,
+      });
 
       // Promote next waiter (FIFO)
       const nextWaiting = await tx<QueueEntryRow[]>`

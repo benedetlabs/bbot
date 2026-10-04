@@ -564,3 +564,68 @@ Deno.test("queuesRepo: Semaphore mode (N slots concurrency pool)", async () => {
   assertEquals(stateAfter.activeHolders.length, 2); // U2 and U3 are now active
   assertEquals(stateAfter.waitingLine.length, 0);
 });
+
+Deno.test("queuesRepo: autoExpireEntry respects checkTtl and cancels outbox warnings", async () => {
+  const { mockSql, outboxEvents } = createMockQueueDb();
+
+  const q = await queuesRepo.findOrCreateQueue(
+    {
+      workspaceId: "ws-1",
+      channelId: "C999",
+      name: "staging-ttl",
+      maxConcurrency: 1,
+      maxHoldMinutes: 45,
+    },
+    mockSql,
+  );
+
+  const joinRes = await queuesRepo.joinQueue(
+    {
+      queueId: q.id,
+      workspaceId: "ws-1",
+      slackUserId: "U_FUTURE",
+    },
+    mockSql,
+  );
+  assertEquals(joinRes.status, "acquired");
+  const entryId = joinRes.entry.id;
+
+  // 1. With checkTtl=true, entry with future expires_at is NOT expired
+  const resFuture = await queuesRepo.autoExpireEntry(
+    {
+      queueId: q.id,
+      entryId,
+      workspaceId: "ws-1",
+      checkTtl: true,
+    },
+    mockSql,
+  );
+  assertEquals(resFuture.status, "already_handled");
+
+  // 2. With checkTtl=false (or past time), entry auto-expires and pending warning is cancelled
+  const resExpired = await queuesRepo.autoExpireEntry(
+    {
+      queueId: q.id,
+      entryId,
+      workspaceId: "ws-1",
+      checkTtl: false,
+    },
+    mockSql,
+  );
+  assertEquals(resExpired.status, "expired");
+
+  const warningEvent = outboxEvents.find(
+    (e) =>
+      e.event_type === "queue.check_expiration_warning" &&
+      e.payload["entryId"] === entryId,
+  );
+  assertEquals(warningEvent?.status, "cancelled");
+});
+
+Deno.test("queuesRepo: getQueueById safe non-UUID validation", async () => {
+  const { mockSql } = createMockQueueDb();
+
+  // Invalid non-UUID format returns null safely without throwing
+  const result = await queuesRepo.getQueueById("not-a-valid-uuid", mockSql);
+  assertEquals(result, null);
+});

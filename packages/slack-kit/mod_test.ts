@@ -319,6 +319,25 @@ Deno.test("slack-kit: slackApi client dispatches HTTP requests", async () => {
     assertEquals(updateRes.ok, true);
     assertEquals(calls[2].url.includes("/chat.update"), true);
     assertEquals(calls[2].body.includes("1700000000.000100"), true);
+
+    const ephemeralRes = await slackApi.postEphemeral(
+      "xoxb-test-token",
+      "C999",
+      "U100",
+      { text: "Ephemeral note", blocks: [] },
+    );
+    assertEquals(ephemeralRes.ok, true);
+    assertEquals(calls[3].url.includes("/chat.postEphemeral"), true);
+    assertEquals(calls[3].body.includes("U100"), true);
+
+    const deleteRes = await slackApi.deleteMessage(
+      "xoxb-test-token",
+      "C999",
+      "1700000000.000100",
+    );
+    assertEquals(deleteRes.ok, true);
+    assertEquals(calls[4].url.includes("/chat.delete"), true);
+    assertEquals(calls[4].body.includes("1700000000.000100"), true);
   } finally {
     globalThis.fetch = originalFetch;
   }

@@ -24,6 +24,7 @@ import {
   type SlackMessagePayload,
 } from "@suite/slack-kit";
 import { decryptOAuthToken, importMasterKey } from "@suite/crypto";
+import { syncStickyQueueCard } from "../queue-app/main.ts";
 
 const WORKER_ID = `worker-${crypto.randomUUID().slice(0, 8)}`;
 const POLL_INTERVAL_MS = parseInt(
@@ -191,6 +192,22 @@ export async function processOutboxEvent(
               `Slack chat.postMessage failed: ${res.error ?? "unknown error"}`,
             );
           }
+
+          if (queueId) {
+            try {
+              await syncStickyQueueCard({
+                queueId,
+                channelId,
+                channelName,
+                botToken,
+              });
+            } catch (cardErr) {
+              console.warn(
+                `[${WORKER_ID}] Failed to sync sticky card on promotion:`,
+                cardErr,
+              );
+            }
+          }
         }
       }
       break;
@@ -204,15 +221,15 @@ export async function processOutboxEvent(
         channelName,
         currentHolderUserId,
         holderUserId,
+        entryId,
         minutesRemaining,
-        waitingCount,
-        nextWaiterUserId,
       } = event.payload as {
         queueId?: string;
         channelId?: string;
         channelName?: string;
         currentHolderUserId?: string;
         holderUserId?: string;
+        entryId?: string;
         minutesRemaining?: number;
         waitingCount?: number;
         nextWaiterUserId?: string;
@@ -222,7 +239,38 @@ export async function processOutboxEvent(
         `[${WORKER_ID}] Sending 5-minute timeout warning to ${targetUser} for queue ${queueId}`,
       );
 
-      if (targetUser) {
+      if (targetUser && queueId) {
+        let waitingCount = 0;
+        let nextWaiterUserId: string | null = null;
+        let minsLeft = minutesRemaining ?? 5;
+
+        // Query live queue state to ensure user is still active and gather up-to-date waiter info
+        try {
+          const state = await queuesRepo.getQueueState(queueId);
+          const holder = state.activeHolders.find(
+            (h) =>
+              h.slack_user_id === targetUser && (!entryId || h.id === entryId),
+          );
+          if (!holder) {
+            console.log(
+              `[${WORKER_ID}] User ${targetUser} is no longer active holder in queue ${queueId}; skipping warning.`,
+            );
+            break;
+          }
+          if (holder.expires_at) {
+            minsLeft = Math.max(
+              1,
+              Math.ceil(
+                (new Date(holder.expires_at).getTime() - Date.now()) / 60000,
+              ),
+            );
+          }
+          waitingCount = state.waitingLine.length;
+          nextWaiterUserId = state.waitingLine[0]?.slack_user_id ?? null;
+        } catch {
+          // If state query fails (e.g. mock DB in test), proceed with payload defaults
+        }
+
         const botToken = await resolveBotToken(event.workspace_id, "queue");
         if (botToken && channelId) {
           const warningMsg = buildQueueTimeoutWarningMessage({
@@ -230,18 +278,29 @@ export async function processOutboxEvent(
             queueId,
             channelId,
             holderUserId: targetUser,
-            minutesRemaining: minutesRemaining ?? 5,
-            waitingCount: waitingCount ?? 0,
+            minutesRemaining: minsLeft,
+            waitingCount,
             nextWaiterUserId,
           });
-          const res = await slackApi.postMessage(
+
+          // Attempt ephemeral dispatch first
+          let res = await slackApi.postEphemeral(
             botToken,
             channelId,
+            targetUser,
             warningMsg,
           );
           if (!res.ok) {
+            // Fallback to chat.postMessage
+            res = await slackApi.postMessage(
+              botToken,
+              channelId,
+              warningMsg,
+            );
+          }
+          if (!res.ok) {
             throw new Error(
-              `Slack chat.postMessage failed: ${res.error ?? "unknown error"}`,
+              `Slack warning dispatch failed: ${res.error ?? "unknown error"}`,
             );
           }
         }
@@ -266,6 +325,7 @@ export async function processOutboxEvent(
           queueId,
           entryId,
           workspaceId: event.workspace_id,
+          checkTtl: true,
         });
 
         if (expireRes.status === "expired" && channelId) {
@@ -277,6 +337,21 @@ export async function processOutboxEvent(
                 channelName ?? "queue"
               } expired automatically and was released.`,
             });
+
+            // Update in-place live sticky queue card
+            try {
+              await syncStickyQueueCard({
+                queueId,
+                channelId,
+                channelName,
+                botToken,
+              });
+            } catch (syncErr) {
+              console.warn(
+                `[${WORKER_ID}] Failed to sync sticky card on auto-expire:`,
+                syncErr,
+              );
+            }
           }
         }
       }

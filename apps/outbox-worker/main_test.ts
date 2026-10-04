@@ -2,7 +2,7 @@ import { assertEquals, assertRejects } from "@std/assert";
 import { processOutboxEvent, runWorkerIteration } from "./main.ts";
 import type { OutboxEventRecord } from "@suite/outbox";
 import { slackApi } from "@suite/slack-kit";
-import { kv, setCustomSql } from "@suite/db";
+import { kv, queuesRepo, setCustomSql } from "@suite/db";
 import type { Sql } from "postgres";
 
 Deno.test("outbox-worker: processes secret.burned_card_update and calls slackApi.updateMessage", async () => {
@@ -241,20 +241,21 @@ Deno.test("outbox-worker: queue.slot_promoted posts message with cross-sell hook
   }
 });
 
-Deno.test("outbox-worker: queue.check_expiration_warning posts timeout warning", async () => {
-  let postCalled = false;
+Deno.test("outbox-worker: queue.check_expiration_warning posts timeout warning via ephemeral message", async () => {
+  let ephemeralCalled = false;
   let postedPayload: unknown = null;
-  const origPost = slackApi.postMessage;
+  const origEphemeral = slackApi.postEphemeral;
   const origEnv = Deno.env.get("QUEUE_APP_BOT_TOKEN");
   Deno.env.set("QUEUE_APP_BOT_TOKEN", "xoxb-test-queue-token");
 
-  slackApi.postMessage = ((token, channelId, message) => {
-    postCalled = true;
+  slackApi.postEphemeral = ((token, channelId, userId, message) => {
+    ephemeralCalled = true;
     assertEquals(token, "xoxb-test-queue-token");
     assertEquals(channelId, "C999");
+    assertEquals(userId, "U_HOLDER");
     postedPayload = message;
-    return Promise.resolve({ ok: true, ts: "1700000000.123456" });
-  }) as typeof slackApi.postMessage;
+    return Promise.resolve({ ok: true, message_ts: "1700000000.123456" });
+  }) as typeof slackApi.postEphemeral;
 
   try {
     const warnEvent: OutboxEventRecord = {
@@ -275,7 +276,7 @@ Deno.test("outbox-worker: queue.check_expiration_warning posts timeout warning",
     };
 
     await processOutboxEvent(warnEvent);
-    assertEquals(postCalled, true);
+    assertEquals(ephemeralCalled, true);
 
     const payload = postedPayload as {
       blocks: { type: string; elements?: { action_id: string }[] }[];
@@ -292,7 +293,107 @@ Deno.test("outbox-worker: queue.check_expiration_warning posts timeout warning",
       true,
     );
   } finally {
+    slackApi.postEphemeral = origEphemeral;
+    if (origEnv !== undefined) Deno.env.set("QUEUE_APP_BOT_TOKEN", origEnv);
+    else Deno.env.delete("QUEUE_APP_BOT_TOKEN");
+  }
+});
+
+Deno.test("outbox-worker: queue.auto_expire auto-expires entry, announces in channel, and syncs sticky card", async () => {
+  let postCalled = false;
+  let updateCalled = false;
+  let expiredEntryId = "";
+  const origPost = slackApi.postMessage;
+  const origUpdate = slackApi.updateMessage;
+  const origAutoExpire = queuesRepo.autoExpireEntry;
+  const origGetQueueState = queuesRepo.getQueueState;
+  const origEnv = Deno.env.get("QUEUE_APP_BOT_TOKEN");
+  Deno.env.set("QUEUE_APP_BOT_TOKEN", "xoxb-test-queue-token");
+
+  slackApi.postMessage = ((token, channelId, message) => {
+    postCalled = true;
+    assertEquals(token, "xoxb-test-queue-token");
+    assertEquals(channelId, "C999");
+    assertEquals(
+      message.text?.includes(
+        "Active hold for <@U_EXPIRED> on #staging-deploy expired",
+      ),
+      true,
+    );
+    return Promise.resolve({ ok: true, ts: "1700000000.999999" });
+  }) as typeof slackApi.postMessage;
+
+  slackApi.updateMessage = ((token, channelId, ts) => {
+    updateCalled = true;
+    assertEquals(token, "xoxb-test-queue-token");
+    assertEquals(channelId, "C999");
+    assertEquals(ts, "1700000000.111111");
+    return Promise.resolve({ ok: true });
+  }) as typeof slackApi.updateMessage;
+
+  queuesRepo.autoExpireEntry = ((params) => {
+    expiredEntryId = params.entryId;
+    return Promise.resolve({
+      status: "expired",
+      expiredEntry: {
+        id: params.entryId,
+        queue_id: params.queueId,
+        slack_user_id: "U_EXPIRED",
+        status: "expired",
+        reason_note: null,
+        joined_at: new Date(),
+        activated_at: new Date(),
+        expires_at: new Date(),
+        completed_at: new Date(),
+      },
+      promotedEntry: null,
+    });
+  }) as typeof queuesRepo.autoExpireEntry;
+
+  queuesRepo.getQueueState = ((queueId) => {
+    return Promise.resolve({
+      queue: {
+        id: queueId,
+        workspace_id: "ws-1",
+        slack_channel_id: "C999",
+        name: "staging-deploy",
+        max_concurrency: 1,
+        max_hold_minutes: 45,
+        sticky_message_ts: "1700000000.111111",
+        created_at: new Date(),
+      },
+      activeHolders: [],
+      waitingLine: [],
+    });
+  }) as typeof queuesRepo.getQueueState;
+
+  try {
+    const expireEvent: OutboxEventRecord = {
+      id: "00000000-0000-0000-0000-000000000007",
+      workspace_id: "00000000-0000-0000-0000-000000000002",
+      app_source: "queue",
+      event_type: "queue.auto_expire",
+      payload: {
+        queueId: "q-deploy-1",
+        entryId: "entry-expired-1",
+        holderUserId: "U_EXPIRED",
+        channelId: "C999",
+        channelName: "staging-deploy",
+      },
+      attempts: 1,
+      max_attempts: 5,
+      created_at: new Date(),
+    };
+
+    await processOutboxEvent(expireEvent);
+    assertEquals(expiredEntryId, "entry-expired-1");
+    assertEquals(postCalled, true);
+    assertEquals(updateCalled, true);
+  } finally {
     slackApi.postMessage = origPost;
+    slackApi.updateMessage = origUpdate;
+    queuesRepo.autoExpireEntry = origAutoExpire;
+    queuesRepo.getQueueState = origGetQueueState;
     if (origEnv !== undefined) Deno.env.set("QUEUE_APP_BOT_TOKEN", origEnv);
     else Deno.env.delete("QUEUE_APP_BOT_TOKEN");
   }

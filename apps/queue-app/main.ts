@@ -39,7 +39,8 @@ export function extractSlackUserId(input: string): string | null {
   const trimmed = input.trim();
   const mentionMatch = trimmed.match(/<@([A-Za-z0-9_]+)(?:\|[^>]+)?>/);
   if (mentionMatch) return mentionMatch[1];
-  const cleaned = trimmed.replace(/^@/, "");
+  const firstToken = trimmed.split(/\s+/)[0] ?? "";
+  const cleaned = firstToken.replace(/^@/, "");
   if (/^[A-Za-z0-9_]+$/i.test(cleaned)) return cleaned;
   return null;
 }
@@ -80,9 +81,9 @@ export async function syncStickyQueueCard(params: {
   const now = Date.now();
 
   const activeHolders: QueueHolder[] = state.activeHolders.map((h) => {
-    const actTime = h.activated_at ? h.activated_at.getTime() : now;
+    const actTime = h.activated_at ? new Date(h.activated_at).getTime() : now;
     const expTime = h.expires_at
-      ? h.expires_at.getTime()
+      ? new Date(h.expires_at).getTime()
       : now + state.queue.max_hold_minutes * 60000;
     const heldMinutes = Math.max(0, Math.floor((now - actTime) / 60000));
     const expiresInMinutes = Math.max(0, Math.ceil((expTime - now) / 60000));
@@ -95,7 +96,7 @@ export async function syncStickyQueueCard(params: {
   });
 
   const waitingLine: QueueWaiter[] = state.waitingLine.map((w) => {
-    const joinTime = w.joined_at ? w.joined_at.getTime() : now;
+    const joinTime = w.joined_at ? new Date(w.joined_at).getTime() : now;
     const waitingMinutes = Math.max(0, Math.floor((now - joinTime) / 60000));
     return {
       userId: w.slack_user_id,
@@ -115,7 +116,13 @@ export async function syncStickyQueueCard(params: {
   let ts = state.queue.sticky_message_ts;
 
   if (params.botToken) {
-    if (ts && !params.forceNewMessage) {
+    if (ts && params.forceNewMessage) {
+      try {
+        await slackApi.deleteMessage(params.botToken, params.channelId, ts);
+      } catch {
+        // Ignore deletion failure (e.g. already deleted or lack permission)
+      }
+    } else if (ts) {
       try {
         const updateRes = await slackApi.updateMessage(
           params.botToken,
@@ -210,11 +217,30 @@ app.post(
       return c.json({
         response_type: "ephemeral",
         text: `🚦 *Queue Commands:*\n` +
-          `• \`/queue\` or \`/queue status\` — Show and refresh the live channel queue card.\n` +
+          `• \`/queue\` or \`/queue status\` or \`/queue list\` — Show and refresh the live channel queue card.\n` +
           `• \`/queue join [note]\` — Join the queue (acquire slot or enter waiting line).\n` +
           `• \`/queue done\` or \`/queue leave\` — Release your lock and hand off to next person.\n` +
           `• \`/queue extend [minutes]\` — Extend your active hold time (default +15m).\n` +
           `• \`/queue kick @user\` — Admin/peer override to kick someone from lock or queue.`,
+      });
+    }
+
+    // Check for unrecognized subcommands
+    const knownCommands = [
+      "",
+      "status",
+      "list",
+      "join",
+      "done",
+      "leave",
+      "extend",
+      "kick",
+    ];
+    if (!knownCommands.includes(firstWord)) {
+      return c.json({
+        response_type: "ephemeral",
+        text:
+          `⚠️ Unknown subcommand \`${firstWord}\`. Type \`/queue help\` for available commands.`,
       });
     }
 
@@ -504,14 +530,35 @@ app.post(
 
       // Resolve queue: action value might be queueId, or look up by channel
       let queue: QueueRow | null = null;
-      if (actionVal && actionVal.startsWith("queue-")) {
-        queue = await queuesRepo.getQueueById(actionVal);
+      if (actionVal) {
+        try {
+          queue = await queuesRepo.getQueueById(actionVal);
+        } catch {
+          queue = null;
+        }
       }
       if (!queue && channelId) {
-        queue = await queuesRepo.findOrCreateQueue({
-          workspaceId,
-          channelId,
-        });
+        // Try channel with actionVal as queue name if not an ID
+        if (actionVal && !actionVal.startsWith("queue-")) {
+          queue = await queuesRepo.getQueueByChannel(
+            workspaceId,
+            channelId,
+            actionVal,
+          );
+        }
+        if (!queue) {
+          queue = await queuesRepo.getQueueByChannel(workspaceId, channelId);
+        }
+        if (!queue) {
+          queue = await queuesRepo.findOrCreateQueue({
+            workspaceId,
+            channelId,
+            name: (actionVal && !actionVal.startsWith("queue-") &&
+                !/^[0-9a-f-]{36}$/i.test(actionVal))
+              ? actionVal
+              : undefined,
+          });
+        }
       }
 
       if (!queue) {

@@ -806,11 +806,22 @@ export interface SlackApiClient {
     channelId: string,
     message: SlackMessagePayload,
   ): Promise<SlackApiResponse & { ts?: string }>;
+  postEphemeral(
+    token: string,
+    channelId: string,
+    userId: string,
+    message: SlackMessagePayload,
+  ): Promise<SlackApiResponse & { message_ts?: string }>;
   updateMessage(
     token: string,
     channelId: string,
     ts: string,
     message: SlackMessagePayload,
+  ): Promise<SlackApiResponse>;
+  deleteMessage(
+    token: string,
+    channelId: string,
+    ts: string,
   ): Promise<SlackApiResponse>;
 }
 
@@ -857,6 +868,29 @@ export const slackApi: SlackApiClient = {
     return await res.json();
   },
 
+  async postEphemeral(
+    token: string,
+    channelId: string,
+    userId: string,
+    message: SlackMessagePayload,
+  ): Promise<SlackApiResponse & { message_ts?: string }> {
+    const baseUrl = getSlackApiUrl();
+    const res = await fetch(`${baseUrl}/chat.postEphemeral`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "Content-Type": "application/json; charset=utf-8",
+      },
+      body: JSON.stringify({
+        channel: channelId,
+        user: userId,
+        text: message.text,
+        blocks: message.blocks,
+      }),
+    });
+    return await res.json();
+  },
+
   async updateMessage(
     token: string,
     channelId: string,
@@ -871,6 +905,23 @@ export const slackApi: SlackApiClient = {
         "Content-Type": "application/json; charset=utf-8",
       },
       body: JSON.stringify({ channel: channelId, ts, ...message }),
+    });
+    return await res.json();
+  },
+
+  async deleteMessage(
+    token: string,
+    channelId: string,
+    ts: string,
+  ): Promise<SlackApiResponse> {
+    const baseUrl = getSlackApiUrl();
+    const res = await fetch(`${baseUrl}/chat.delete`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "Content-Type": "application/json; charset=utf-8",
+      },
+      body: JSON.stringify({ channel: channelId, ts }),
     });
     return await res.json();
   },
