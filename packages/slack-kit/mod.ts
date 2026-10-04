@@ -174,9 +174,13 @@ export interface SlackModalView {
 
 export interface SlackMessagePayload {
   text?: string;
-  blocks: SlackBlock[];
+  blocks?: SlackBlock[];
   response_type?: "in_channel" | "ephemeral";
   replace_original?: boolean;
+}
+
+export interface SlackBlockMessagePayload extends SlackMessagePayload {
+  blocks: SlackBlock[];
 }
 
 // --- Secret Block Kit Builders ---
@@ -337,7 +341,7 @@ export function buildSecretActiveCard(params: {
   allowedRecipientSlackId?: string | null;
   ttlMinutes: number;
   remainingViews: number;
-}): SlackMessagePayload {
+}): SlackBlockMessagePayload {
   const contextDesc = params.contextLabel
     ? `*📌 Context:* ${params.contextLabel}\n`
     : "";
@@ -450,7 +454,7 @@ export function buildSecretBurnedCard(params: {
   viewerSlackId?: string;
   burnedAtIso: string;
   wasRevoked?: boolean;
-}): SlackMessagePayload {
+}): SlackBlockMessagePayload {
   const title = params.wasRevoked
     ? "🔒 *Encrypted Secret (Revoked & Destroyed)*"
     : "🔒 *Encrypted Secret (Permanently Destroyed)*";
@@ -502,7 +506,7 @@ export function buildQueueCard(params: {
   activeHolders: QueueHolder[];
   waitingLine: QueueWaiter[];
   maxConcurrency: number;
-}): SlackMessagePayload {
+}): SlackBlockMessagePayload {
   const activeCount = params.activeHolders.length;
   const header =
     `🚦 *Queue: #${params.channelName}*  •  [ ${activeCount}/${params.maxConcurrency} Active Slots Occupied ]`;
@@ -580,10 +584,155 @@ export function buildQueueCard(params: {
         text: { type: "plain_text", text: "⏱️ +15m", emoji: true },
         value: params.queueId,
       },
+      {
+        type: "button",
+        action_id: "queue_attach_secret_click",
+        text: {
+          type: "plain_text",
+          text: "🔐 Anexar Segredo Efêmero",
+          emoji: true,
+        },
+        value: params.queueId,
+      },
     ],
   });
 
   return { blocks };
+}
+
+export function buildQueuePromotionMessage(params: {
+  channelName: string;
+  queueId?: string;
+  channelId?: string;
+  promotedUserId: string;
+  previousHolderUserId?: string | null;
+  maxHoldMinutes: number;
+}): SlackBlockMessagePayload {
+  const previousText = params.previousHolderUserId
+    ? ` (auto-released or handed off from <@${params.previousHolderUserId}>)`
+    : "";
+
+  return {
+    response_type: "in_channel",
+    text:
+      `🚀 <@${params.promotedUserId}>, you're up! You now hold the active lock on #${params.channelName}.`,
+    blocks: [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text:
+            `🚀 *You're up, <@${params.promotedUserId}>!*\nYou now hold the active lock on *#${params.channelName}*${previousText}.\n⏳ Auto-expires in *${params.maxHoldMinutes}m*.`,
+        },
+      },
+      {
+        type: "actions",
+        block_id: "queue_promotion_actions",
+        elements: [
+          {
+            type: "button",
+            action_id: "queue_attach_secret_click",
+            text: {
+              type: "plain_text",
+              text: "🔐 Anexar Segredo Efêmero",
+              emoji: true,
+            },
+            style: "primary",
+            value: params.queueId ?? params.channelName,
+          },
+          {
+            type: "button",
+            action_id: "queue_done_click",
+            text: {
+              type: "plain_text",
+              text: "✅ Done / Release",
+              emoji: true,
+            },
+            value: params.queueId ?? params.channelName,
+          },
+          {
+            type: "button",
+            action_id: "queue_extend_click",
+            text: {
+              type: "plain_text",
+              text: "⏱️ +15m",
+              emoji: true,
+            },
+            value: params.queueId ?? params.channelName,
+          },
+        ],
+      },
+    ],
+  };
+}
+
+export function buildQueueTimeoutWarningMessage(params: {
+  channelName: string;
+  queueId?: string;
+  channelId?: string;
+  holderUserId: string;
+  minutesRemaining: number;
+  waitingCount: number;
+  nextWaiterUserId?: string | null;
+}): SlackBlockMessagePayload {
+  const waiterText = params.nextWaiterUserId
+    ? ` and <@${params.nextWaiterUserId}> is waiting in line`
+    : (params.waitingCount > 0
+      ? ` and ${params.waitingCount} teammate(s) waiting`
+      : "");
+
+  return {
+    response_type: "ephemeral",
+    text:
+      `⏳ Your lock on #${params.channelName} expires in ${params.minutesRemaining} minutes!`,
+    blocks: [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text:
+            `⏳ *Your lock on #${params.channelName} expires in ${params.minutesRemaining} minutes*${waiterText}.\nNeed more time?`,
+        },
+      },
+      {
+        type: "actions",
+        block_id: "queue_warning_actions",
+        elements: [
+          {
+            type: "button",
+            action_id: "queue_extend_click",
+            text: {
+              type: "plain_text",
+              text: "⏱️ Extend +15m",
+              emoji: true,
+            },
+            style: "primary",
+            value: params.queueId ?? params.channelName,
+          },
+          {
+            type: "button",
+            action_id: "queue_done_click",
+            text: {
+              type: "plain_text",
+              text: "✅ Done / Release",
+              emoji: true,
+            },
+            value: params.queueId ?? params.channelName,
+          },
+          {
+            type: "button",
+            action_id: "queue_attach_secret_click",
+            text: {
+              type: "plain_text",
+              text: "🔐 Anexar Segredo Efêmero",
+              emoji: true,
+            },
+            value: params.queueId ?? params.channelName,
+          },
+        ],
+      },
+    ],
+  };
 }
 
 export function buildTodoCard(params: {
@@ -592,7 +741,7 @@ export function buildTodoCard(params: {
   assigneeSlackId: string;
   creatorSlackId: string;
   dueAtFormatted?: string;
-}): SlackMessagePayload {
+}): SlackBlockMessagePayload {
   const due = params.dueAtFormatted
     ? ` • ⏰ Due: ${params.dueAtFormatted}`
     : "";

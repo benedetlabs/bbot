@@ -1,6 +1,8 @@
 import { assertEquals } from "@std/assert";
 import {
   buildQueueCard,
+  buildQueuePromotionMessage,
+  buildQueueTimeoutWarningMessage,
   buildSecretActiveCard,
   buildSecretBurnedCard,
   buildSecretModal,
@@ -190,6 +192,64 @@ Deno.test("slack-kit: queue and todo card builders", () => {
     maxConcurrency: 1,
   });
   assertEquals(queueCard.blocks.length, 4);
+
+  // Check cross-sell button in queue card
+  const queueActions = queueCard.blocks[3] as {
+    type: string;
+    elements: { action_id: string }[];
+  };
+  assertEquals(queueActions.elements.length, 4);
+  assertEquals(
+    queueActions.elements.some((e) =>
+      e.action_id === "queue_attach_secret_click"
+    ),
+    true,
+  );
+
+  // Promotion message test (handoff card with cross-sell hook)
+  const promoMsg = buildQueuePromotionMessage({
+    channelName: "deploy-prod",
+    promotedUserId: "U20",
+    previousHolderUserId: "U10",
+    maxHoldMinutes: 45,
+  });
+  assertEquals(promoMsg.response_type, "in_channel");
+  assertEquals(promoMsg.blocks.length, 2);
+  const promoActions = promoMsg.blocks[1] as {
+    type: string;
+    elements: { action_id: string }[];
+  };
+  assertEquals(
+    promoActions.elements.some((e) =>
+      e.action_id === "queue_attach_secret_click"
+    ),
+    true,
+  );
+
+  // Timeout warning message test
+  const warningMsg = buildQueueTimeoutWarningMessage({
+    channelName: "deploy-prod",
+    holderUserId: "U10",
+    minutesRemaining: 5,
+    waitingCount: 1,
+    nextWaiterUserId: "U20",
+  });
+  assertEquals(warningMsg.response_type, "ephemeral");
+  assertEquals(warningMsg.blocks.length, 2);
+  const warningActions = warningMsg.blocks[1] as {
+    type: string;
+    elements: { action_id: string }[];
+  };
+  assertEquals(
+    warningActions.elements.some((e) => e.action_id === "queue_extend_click"),
+    true,
+  );
+  assertEquals(
+    warningActions.elements.some((e) =>
+      e.action_id === "queue_attach_secret_click"
+    ),
+    true,
+  );
 
   const todoCard = buildTodoCard({
     todoId: "t-1",

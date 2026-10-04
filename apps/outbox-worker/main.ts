@@ -14,9 +14,15 @@ import {
   getSqlWrite,
   installationsRepo,
   kv,
+  queuesRepo,
   type SecretKVPayload,
 } from "@suite/db";
-import { slackApi, type SlackMessagePayload } from "@suite/slack-kit";
+import {
+  buildQueuePromotionMessage,
+  buildQueueTimeoutWarningMessage,
+  slackApi,
+  type SlackMessagePayload,
+} from "@suite/slack-kit";
 import { decryptOAuthToken, importMasterKey } from "@suite/crypto";
 
 const WORKER_ID = `worker-${crypto.randomUUID().slice(0, 8)}`;
@@ -149,24 +155,131 @@ export async function processOutboxEvent(
     }
 
     case "queue.slot_promoted": {
-      const { queueId, newHolderUserId } = event.payload as {
+      const {
+        queueId,
+        channelId,
+        channelName,
+        newHolderUserId,
+        previousHolderUserId,
+        maxHoldMinutes,
+      } = event.payload as {
         queueId?: string;
+        channelId?: string;
+        channelName?: string;
         newHolderUserId?: string;
+        previousHolderUserId?: string;
+        maxHoldMinutes?: number;
       };
       console.log(
         `[${WORKER_ID}] Promoted user ${newHolderUserId} in queue ${queueId}`,
       );
+
+      if (newHolderUserId) {
+        const botToken = await resolveBotToken(event.workspace_id, "queue");
+        if (botToken && channelId) {
+          const promoMsg = buildQueuePromotionMessage({
+            channelName: channelName ?? "queue",
+            queueId,
+            channelId,
+            promotedUserId: newHolderUserId,
+            previousHolderUserId,
+            maxHoldMinutes: maxHoldMinutes ?? 45,
+          });
+          const res = await slackApi.postMessage(botToken, channelId, promoMsg);
+          if (!res.ok) {
+            throw new Error(
+              `Slack chat.postMessage failed: ${res.error ?? "unknown error"}`,
+            );
+          }
+        }
+      }
       break;
     }
 
-    case "queue.check_expiration_warning": {
-      const { queueId, currentHolderUserId } = event.payload as {
+    case "queue.check_expiration_warning":
+    case "queue.timeout_warning": {
+      const {
+        queueId,
+        channelId,
+        channelName,
+        currentHolderUserId,
+        holderUserId,
+        minutesRemaining,
+        waitingCount,
+        nextWaiterUserId,
+      } = event.payload as {
         queueId?: string;
+        channelId?: string;
+        channelName?: string;
         currentHolderUserId?: string;
+        holderUserId?: string;
+        minutesRemaining?: number;
+        waitingCount?: number;
+        nextWaiterUserId?: string;
       };
+      const targetUser = holderUserId ?? currentHolderUserId;
       console.log(
-        `[${WORKER_ID}] Sending 5-minute timeout warning to ${currentHolderUserId} for queue ${queueId}`,
+        `[${WORKER_ID}] Sending 5-minute timeout warning to ${targetUser} for queue ${queueId}`,
       );
+
+      if (targetUser) {
+        const botToken = await resolveBotToken(event.workspace_id, "queue");
+        if (botToken && channelId) {
+          const warningMsg = buildQueueTimeoutWarningMessage({
+            channelName: channelName ?? "queue",
+            queueId,
+            channelId,
+            holderUserId: targetUser,
+            minutesRemaining: minutesRemaining ?? 5,
+            waitingCount: waitingCount ?? 0,
+            nextWaiterUserId,
+          });
+          const res = await slackApi.postMessage(
+            botToken,
+            channelId,
+            warningMsg,
+          );
+          if (!res.ok) {
+            throw new Error(
+              `Slack chat.postMessage failed: ${res.error ?? "unknown error"}`,
+            );
+          }
+        }
+      }
+      break;
+    }
+
+    case "queue.auto_expire": {
+      const { queueId, entryId, holderUserId, channelId, channelName } = event
+        .payload as {
+          queueId?: string;
+          entryId?: string;
+          holderUserId?: string;
+          channelId?: string;
+          channelName?: string;
+        };
+      console.log(
+        `[${WORKER_ID}] Auto-expiring active lock for ${holderUserId} in queue ${queueId}`,
+      );
+      if (queueId && entryId) {
+        const expireRes = await queuesRepo.autoExpireEntry({
+          queueId,
+          entryId,
+          workspaceId: event.workspace_id,
+        });
+
+        if (expireRes.status === "expired" && channelId) {
+          const botToken = await resolveBotToken(event.workspace_id, "queue");
+          if (botToken) {
+            await slackApi.postMessage(botToken, channelId, {
+              response_type: "in_channel",
+              text: `⌛ Active hold for <@${holderUserId}> on #${
+                channelName ?? "queue"
+              } expired automatically and was released.`,
+            });
+          }
+        }
+      }
       break;
     }
 

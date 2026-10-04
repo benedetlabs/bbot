@@ -154,7 +154,7 @@ Deno.test("outbox-worker: throws error when Slack API fails to trigger backoff r
 Deno.test("outbox-worker: processes queue events cleanly", async () => {
   const promoEvent: OutboxEventRecord = {
     id: "00000000-0000-0000-0000-000000000003",
-    workspace_id: "00000000-0000-0000-0000-000000000002",
+    workspace_id: "",
     app_source: "queue",
     event_type: "queue.slot_promoted",
     payload: {
@@ -171,7 +171,7 @@ Deno.test("outbox-worker: processes queue events cleanly", async () => {
 
   const warnEvent: OutboxEventRecord = {
     id: "00000000-0000-0000-0000-000000000004",
-    workspace_id: "00000000-0000-0000-0000-000000000002",
+    workspace_id: "",
     app_source: "queue",
     event_type: "queue.check_expiration_warning",
     payload: {
@@ -185,6 +185,117 @@ Deno.test("outbox-worker: processes queue events cleanly", async () => {
 
   await processOutboxEvent(warnEvent);
   assertEquals(warnEvent.event_type, "queue.check_expiration_warning");
+});
+
+Deno.test("outbox-worker: queue.slot_promoted posts message with cross-sell hook", async () => {
+  let postCalled = false;
+  let postedPayload: unknown = null;
+  const origPost = slackApi.postMessage;
+  const origEnv = Deno.env.get("QUEUE_APP_BOT_TOKEN");
+  Deno.env.set("QUEUE_APP_BOT_TOKEN", "xoxb-test-queue-token");
+
+  slackApi.postMessage = ((token, channelId, message) => {
+    postCalled = true;
+    assertEquals(token, "xoxb-test-queue-token");
+    assertEquals(channelId, "C999");
+    postedPayload = message;
+    return Promise.resolve({ ok: true, ts: "1700000000.123456" });
+  }) as typeof slackApi.postMessage;
+
+  try {
+    const promoEvent: OutboxEventRecord = {
+      id: "00000000-0000-0000-0000-000000000005",
+      workspace_id: "00000000-0000-0000-0000-000000000002",
+      app_source: "queue",
+      event_type: "queue.slot_promoted",
+      payload: {
+        queueId: "q-deploy-1",
+        channelId: "C999",
+        channelName: "staging-deploy",
+        newHolderUserId: "U_PROMOTED",
+        previousHolderUserId: "U_PREVIOUS",
+        maxHoldMinutes: 30,
+      },
+      attempts: 1,
+      max_attempts: 5,
+      created_at: new Date(),
+    };
+
+    await processOutboxEvent(promoEvent);
+    assertEquals(postCalled, true);
+
+    const payload = postedPayload as {
+      blocks: { type: string; elements?: { action_id: string }[] }[];
+    };
+    const actions = payload.blocks.find((b) => b.type === "actions");
+    assertEquals(
+      actions?.elements?.some((e) =>
+        e.action_id === "queue_attach_secret_click"
+      ),
+      true,
+    );
+  } finally {
+    slackApi.postMessage = origPost;
+    if (origEnv !== undefined) Deno.env.set("QUEUE_APP_BOT_TOKEN", origEnv);
+    else Deno.env.delete("QUEUE_APP_BOT_TOKEN");
+  }
+});
+
+Deno.test("outbox-worker: queue.check_expiration_warning posts timeout warning", async () => {
+  let postCalled = false;
+  let postedPayload: unknown = null;
+  const origPost = slackApi.postMessage;
+  const origEnv = Deno.env.get("QUEUE_APP_BOT_TOKEN");
+  Deno.env.set("QUEUE_APP_BOT_TOKEN", "xoxb-test-queue-token");
+
+  slackApi.postMessage = ((token, channelId, message) => {
+    postCalled = true;
+    assertEquals(token, "xoxb-test-queue-token");
+    assertEquals(channelId, "C999");
+    postedPayload = message;
+    return Promise.resolve({ ok: true, ts: "1700000000.123456" });
+  }) as typeof slackApi.postMessage;
+
+  try {
+    const warnEvent: OutboxEventRecord = {
+      id: "00000000-0000-0000-0000-000000000006",
+      workspace_id: "00000000-0000-0000-0000-000000000002",
+      app_source: "queue",
+      event_type: "queue.check_expiration_warning",
+      payload: {
+        queueId: "q-deploy-1",
+        channelId: "C999",
+        channelName: "staging-deploy",
+        currentHolderUserId: "U_HOLDER",
+        minutesRemaining: 5,
+      },
+      attempts: 1,
+      max_attempts: 5,
+      created_at: new Date(),
+    };
+
+    await processOutboxEvent(warnEvent);
+    assertEquals(postCalled, true);
+
+    const payload = postedPayload as {
+      blocks: { type: string; elements?: { action_id: string }[] }[];
+    };
+    const actions = payload.blocks.find((b) => b.type === "actions");
+    assertEquals(
+      actions?.elements?.some((e) => e.action_id === "queue_extend_click"),
+      true,
+    );
+    assertEquals(
+      actions?.elements?.some((e) =>
+        e.action_id === "queue_attach_secret_click"
+      ),
+      true,
+    );
+  } finally {
+    slackApi.postMessage = origPost;
+    if (origEnv !== undefined) Deno.env.set("QUEUE_APP_BOT_TOKEN", origEnv);
+    else Deno.env.delete("QUEUE_APP_BOT_TOKEN");
+  }
 });
 
 Deno.test("outbox-worker: runWorkerIteration claims and completes events", async () => {
