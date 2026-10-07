@@ -8,6 +8,9 @@ import {
   buildSecretModal,
   buildSecretRevealedModal,
   buildTodoCard,
+  buildTodoCompletedNotificationMessage,
+  buildTodoHomeView,
+  buildTodoModal,
   slackApi,
   slackModalClear,
   slackModalErrors,
@@ -338,7 +341,72 @@ Deno.test("slack-kit: slackApi client dispatches HTTP requests", async () => {
     assertEquals(deleteRes.ok, true);
     assertEquals(calls[4].url.includes("/chat.delete"), true);
     assertEquals(calls[4].body.includes("1700000000.000100"), true);
+
+    const publishRes = await slackApi.publishView(
+      "xoxb-test-token",
+      "U100",
+      { type: "home", blocks: [] },
+    );
+    assertEquals(publishRes.ok, true);
+    assertEquals(calls[5].url.includes("/views.publish"), true);
+    assertEquals(calls[5].body.includes("U100"), true);
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+Deno.test("slack-kit: buildTodoModal creates compliant modal with metadata", () => {
+  const modal = buildTodoModal({
+    initialTitle: "Review Security Audit",
+    initialPermalink: "https://slack.com/archives/C123/p456",
+    channelId: "C123",
+    sourceMessageTs: "456.789",
+  });
+
+  assertEquals(modal.type, "modal");
+  assertEquals(modal.callback_id, "todo_create_modal");
+  assertEquals(modal.title.text, "Create Action Item");
+  assertEquals(modal.blocks.length, 4); // title, assignee, due date, context link
+
+  const metadata = JSON.parse(modal.private_metadata ?? "{}");
+  assertEquals(metadata.channelId, "C123");
+  assertEquals(metadata.permalink, "https://slack.com/archives/C123/p456");
+  assertEquals(metadata.sourceMessageTs, "456.789");
+});
+
+Deno.test("slack-kit: buildTodoHomeView renders GTD sections and stats", () => {
+  const homeView = buildTodoHomeView({
+    userId: "U_TEST",
+    gtd: {
+      today: [{ id: "t1", title: "Task 1", due_at: new Date() }],
+      overdue: [{ id: "t2", title: "Task 2", due_at: new Date() }],
+      delegatedToMe: [{
+        id: "t3",
+        title: "Task 3",
+        creator_slack_user_id: "U_BOSS",
+      }],
+      delegatedByMe: [{
+        id: "t4",
+        title: "Task 4",
+        assignee_slack_user_id: "U_DEV",
+      }],
+      completed: [{ id: "t5", title: "Task 5", completed_at: new Date() }],
+    },
+  });
+
+  assertEquals(homeView.type, "home");
+  assertEquals(homeView.blocks.length > 5, true);
+});
+
+Deno.test("slack-kit: buildTodoCompletedNotificationMessage formats accountability notice", () => {
+  const notif = buildTodoCompletedNotificationMessage({
+    todoId: "t-100",
+    title: "Fix production bug",
+    completedByUserId: "U_DEV",
+    creatorUserId: "U_MANAGER",
+    sourcePermalink: "https://slack.com/archives/C1/p1",
+  });
+
+  assertEquals(notif.text?.includes("Fix production bug"), true);
+  assertEquals(notif.blocks.length, 1);
 });

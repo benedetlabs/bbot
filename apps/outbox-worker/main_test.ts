@@ -438,3 +438,56 @@ Deno.test("outbox-worker: runWorkerIteration claims and completes events", async
     setCustomSql(null, null);
   }
 });
+
+Deno.test("outbox-worker: processes todo.completed_notification and dispatches message", async () => {
+  let postCalled = false;
+  let targetChannel = "";
+  let messagePayload: Record<string, unknown> | null = null;
+  const origPost = slackApi.postMessage;
+
+  slackApi.postMessage = ((token, channelId, message) => {
+    postCalled = true;
+    targetChannel = channelId;
+    messagePayload = message as unknown as Record<string, unknown>;
+    assertEquals(token, "xoxb-todo-worker-token");
+    return Promise.resolve({ ok: true, ts: "1700000000.123456" });
+  }) as typeof slackApi.postMessage;
+
+  const origEnv = Deno.env.get("TODO_APP_BOT_TOKEN");
+  Deno.env.set("TODO_APP_BOT_TOKEN", "xoxb-todo-worker-token");
+
+  try {
+    const event: OutboxEventRecord = {
+      id: "00000000-0000-0000-0000-000000000099",
+      workspace_id: "00000000-0000-0000-0000-000000000001",
+      app_source: "todo",
+      event_type: "todo.completed_notification",
+      payload: {
+        todoId: "todo-123",
+        title: "Review pull request #50",
+        creatorSlackUserId: "U_CREATOR",
+        assigneeSlackUserId: "U_ASSIGNEE",
+        completedBySlackUserId: "U_ASSIGNEE",
+        channelId: "C_DEV",
+        sourcePermalink: "https://slack.com/archives/C_DEV/p123",
+      },
+      attempts: 1,
+      max_attempts: 5,
+      created_at: new Date(),
+    };
+
+    await processOutboxEvent(event);
+    assertEquals(postCalled, true);
+    assertEquals(targetChannel, "C_DEV");
+    assertEquals(
+      String((messagePayload as Record<string, unknown> | null)?.text).includes(
+        "Review pull request #50",
+      ),
+      true,
+    );
+  } finally {
+    slackApi.postMessage = origPost;
+    if (origEnv !== undefined) Deno.env.set("TODO_APP_BOT_TOKEN", origEnv);
+    else Deno.env.delete("TODO_APP_BOT_TOKEN");
+  }
+});

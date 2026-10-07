@@ -24,7 +24,7 @@ English as the primary language and optimized for minimum required OAuth scopes.
 4. Copy the contents of the chosen manifest file and paste it into the **YAML**
    tab.
 5. Replace `your-domain.com` with your active tunnel (e.g., ngrok or cloudflared
-   URL) or production domain.
+   URL — see [`TUNNEL_SETUP.md`](../TUNNEL_SETUP.md)) or production domain.
 6. Click **Next** > **Create**.
 7. Navigate to **Install App** in the left sidebar and click **Install to
    Workspace**.

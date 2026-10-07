@@ -172,6 +172,13 @@ export interface SlackModalView {
   blocks: SlackBlock[];
 }
 
+export interface SlackHomeView {
+  type: "home";
+  blocks: SlackBlock[];
+  private_metadata?: string;
+  external_id?: string;
+}
+
 export interface SlackMessagePayload {
   text?: string;
   blocks?: SlackBlock[];
@@ -741,29 +748,392 @@ export function buildTodoCard(params: {
   assigneeSlackId: string;
   creatorSlackId: string;
   dueAtFormatted?: string;
+  sourcePermalink?: string;
+  status?: string;
 }): SlackBlockMessagePayload {
   const due = params.dueAtFormatted
     ? ` • ⏰ Due: ${params.dueAtFormatted}`
     : "";
+  const link = params.sourcePermalink
+    ? `\n🔗 <${params.sourcePermalink}|Jump to source>`
+    : "";
+  const isCompleted = params.status === "completed";
+
   return {
-    text: `📋 New Task: ${params.title}`,
+    text: `📋 ${isCompleted ? "Completed Task" : "Task"}: ${params.title}`,
+    blocks: [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `📋 *Task:* ${
+            isCompleted ? `~${params.title}~` : params.title
+          }\n*Assignee:* <@${params.assigneeSlackId}> (created by <@${params.creatorSlackId}>)${due}${link}`,
+        },
+        accessory: isCompleted
+          ? {
+            type: "button",
+            action_id: "todo_reopen_click",
+            text: { type: "plain_text", text: "↩️ Reopen", emoji: true },
+            value: params.todoId,
+          }
+          : {
+            type: "button",
+            action_id: "todo_complete_click",
+            text: { type: "plain_text", text: "✅ Complete", emoji: true },
+            style: "primary",
+            value: params.todoId,
+          },
+      },
+    ],
+  };
+}
+
+export function buildTodoModal(params: {
+  initialTitle?: string;
+  initialPermalink?: string;
+  channelId?: string;
+  sourceMessageTs?: string;
+}): SlackModalView {
+  const blocks: SlackBlock[] = [
+    {
+      type: "input",
+      block_id: "title_block",
+      label: {
+        type: "plain_text",
+        text: "Task Title / Action Item",
+        emoji: true,
+      },
+      element: {
+        type: "plain_text_input",
+        action_id: "title_input",
+        multiline: true,
+        placeholder: {
+          type: "plain_text",
+          text: "What needs to be done?",
+          emoji: true,
+        },
+        initial_value: params.initialTitle ?? undefined,
+      },
+    },
+    {
+      type: "input",
+      block_id: "assignee_block",
+      label: { type: "plain_text", text: "Assignee", emoji: true },
+      element: {
+        type: "users_select",
+        action_id: "assignee_select",
+        placeholder: {
+          type: "plain_text",
+          text: "Select assignee (defaults to you)",
+          emoji: true,
+        },
+      },
+      optional: true,
+    },
+    {
+      type: "input",
+      block_id: "due_date_block",
+      label: { type: "plain_text", text: "Due Date", emoji: true },
+      element: {
+        type: "datepicker",
+        action_id: "due_date_picker",
+        placeholder: {
+          type: "plain_text",
+          text: "Select a date",
+          emoji: true,
+        },
+      },
+      optional: true,
+    },
+  ];
+
+  if (params.initialPermalink) {
+    blocks.push({
+      type: "context",
+      elements: [
+        {
+          type: "mrkdwn",
+          text:
+            `🔗 Original message: <${params.initialPermalink}|Jump to Slack message>`,
+        },
+      ],
+    });
+  }
+
+  const metadata = JSON.stringify({
+    channelId: params.channelId ?? null,
+    permalink: params.initialPermalink ?? null,
+    sourceMessageTs: params.sourceMessageTs ?? null,
+  });
+
+  return {
+    type: "modal",
+    callback_id: "todo_create_modal",
+    title: { type: "plain_text", text: "Create Action Item", emoji: true },
+    submit: { type: "plain_text", text: "Create Task", emoji: true },
+    close: { type: "plain_text", text: "Cancel", emoji: true },
+    private_metadata: metadata,
+    blocks,
+  };
+}
+
+export function buildTodoCompletedNotificationMessage(params: {
+  todoId: string;
+  title: string;
+  completedByUserId: string;
+  creatorUserId: string;
+  channelId?: string;
+  sourcePermalink?: string;
+}): SlackBlockMessagePayload {
+  const permalinkText = params.sourcePermalink
+    ? `\n🔗 <${params.sourcePermalink}|Jump to context>`
+    : "";
+
+  return {
+    response_type: "in_channel",
+    text: `🎉 <@${params.completedByUserId}> completed: "${params.title}"`,
     blocks: [
       {
         type: "section",
         text: {
           type: "mrkdwn",
           text:
-            `📋 *Task:* ${params.title}\n*Assignee:* <@${params.assigneeSlackId}> (created by <@${params.creatorSlackId}>)${due}`,
+            `🎉 *Task Completed!*\n<@${params.completedByUserId}> checked off the task assigned by <@${params.creatorUserId}>:\n> *${params.title}*${permalinkText}`,
+        },
+      },
+    ],
+  };
+}
+
+export function buildTodoHomeView(params: {
+  userId: string;
+  gtd: {
+    today: Array<{
+      id: string;
+      title: string;
+      due_at?: Date | null;
+      source_permalink?: string | null;
+      creator_slack_user_id?: string;
+    }>;
+    overdue: Array<{
+      id: string;
+      title: string;
+      due_at?: Date | null;
+      source_permalink?: string | null;
+    }>;
+    delegatedToMe: Array<{
+      id: string;
+      title: string;
+      creator_slack_user_id: string;
+      due_at?: Date | null;
+    }>;
+    delegatedByMe: Array<{
+      id: string;
+      title: string;
+      assignee_slack_user_id: string;
+      due_at?: Date | null;
+    }>;
+    completed: Array<{
+      id: string;
+      title: string;
+      completed_at?: Date | null;
+    }>;
+    inbox?: Array<{ id: string; title: string; due_at?: Date | null }>;
+  };
+}): SlackHomeView {
+  const { userId, gtd } = params;
+  const blocks: SlackBlock[] = [
+    {
+      type: "header",
+      text: { type: "plain_text", text: "📋 GTD Action Center", emoji: true },
+    },
+    {
+      type: "context",
+      elements: [
+        {
+          type: "mrkdwn",
+          text:
+            `👋 Hello <@${userId}>  •  📅 Today: *${gtd.today.length}*  •  🔥 Overdue: *${gtd.overdue.length}*  •  🤝 Delegated: *${
+              gtd.delegatedToMe.length + gtd.delegatedByMe.length
+            }*  •  ✅ Completed: *${gtd.completed.length}*`,
+        },
+      ],
+    },
+    {
+      type: "actions",
+      block_id: "todo_home_header_actions",
+      elements: [
+        {
+          type: "button",
+          action_id: "todo_home_refresh_click",
+          text: { type: "plain_text", text: "🔄 Refresh", emoji: true },
+          value: "refresh",
+        },
+      ],
+    },
+    { type: "divider" },
+  ];
+
+  // 1. 🔥 OVERDUE
+  blocks.push({
+    type: "section",
+    text: { type: "mrkdwn", text: `*🔥 Overdue (${gtd.overdue.length})*` },
+  });
+  if (gtd.overdue.length === 0) {
+    blocks.push({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: "_No overdue tasks! You're completely up to date._",
+      },
+    });
+  } else {
+    for (const t of gtd.overdue) {
+      const dueStr = t.due_at
+        ? ` ⏰ _${new Date(t.due_at).toLocaleDateString()}_`
+        : "";
+      const link = t.source_permalink ? ` <${t.source_permalink}|🔗>` : "";
+      blocks.push({
+        type: "section",
+        text: { type: "mrkdwn", text: `🔴 *${t.title}*${dueStr}${link}` },
+        accessory: {
+          type: "button",
+          action_id: "todo_complete_click",
+          text: { type: "plain_text", text: "✅ Done", emoji: true },
+          style: "primary",
+          value: t.id,
+        },
+      });
+    }
+  }
+
+  blocks.push({ type: "divider" });
+
+  // 2. 📅 TODAY
+  blocks.push({
+    type: "section",
+    text: { type: "mrkdwn", text: `*📅 Today (${gtd.today.length})*` },
+  });
+  if (gtd.today.length === 0) {
+    blocks.push({
+      type: "section",
+      text: { type: "mrkdwn", text: "_No tasks scheduled for today._" },
+    });
+  } else {
+    for (const t of gtd.today) {
+      const link = t.source_permalink ? ` <${t.source_permalink}|🔗>` : "";
+      blocks.push({
+        type: "section",
+        text: { type: "mrkdwn", text: `📌 *${t.title}*${link}` },
+        accessory: {
+          type: "button",
+          action_id: "todo_complete_click",
+          text: { type: "plain_text", text: "✅ Done", emoji: true },
+          style: "primary",
+          value: t.id,
+        },
+      });
+    }
+  }
+
+  blocks.push({ type: "divider" });
+
+  // 3. 🤝 DELEGATED TO ME
+  blocks.push({
+    type: "section",
+    text: {
+      type: "mrkdwn",
+      text: `*🤝 Delegated to Me (${gtd.delegatedToMe.length})*`,
+    },
+  });
+  if (gtd.delegatedToMe.length === 0) {
+    blocks.push({
+      type: "section",
+      text: { type: "mrkdwn", text: "_No tasks delegated to you._" },
+    });
+  } else {
+    for (const t of gtd.delegatedToMe) {
+      blocks.push({
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `👤 *${t.title}* (from <@${t.creator_slack_user_id}>)`,
         },
         accessory: {
           type: "button",
           action_id: "todo_complete_click",
-          text: { type: "plain_text", text: "✅ Complete", emoji: true },
+          text: { type: "plain_text", text: "✅ Done", emoji: true },
           style: "primary",
-          value: params.todoId,
+          value: t.id,
         },
+      });
+    }
+  }
+
+  blocks.push({ type: "divider" });
+
+  // 4. 📤 DELEGATED BY ME
+  blocks.push({
+    type: "section",
+    text: {
+      type: "mrkdwn",
+      text: `*📤 Delegated by Me (${gtd.delegatedByMe.length})*`,
+    },
+  });
+  if (gtd.delegatedByMe.length === 0) {
+    blocks.push({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: "_You haven't assigned tasks to others._",
       },
-    ],
+    });
+  } else {
+    for (const t of gtd.delegatedByMe) {
+      blocks.push({
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `⏳ *${t.title}* ➔ assigned to <@${t.assignee_slack_user_id}>`,
+        },
+      });
+    }
+  }
+
+  blocks.push({ type: "divider" });
+
+  // 5. ✅ RECENTLY COMPLETED
+  blocks.push({
+    type: "section",
+    text: {
+      type: "mrkdwn",
+      text: `*✅ Recently Completed (${gtd.completed.length})*`,
+    },
+  });
+  if (gtd.completed.length === 0) {
+    blocks.push({
+      type: "section",
+      text: { type: "mrkdwn", text: "_No completed tasks recorded._" },
+    });
+  } else {
+    for (const t of gtd.completed) {
+      blocks.push({
+        type: "section",
+        text: { type: "mrkdwn", text: `~${t.title}~` },
+        accessory: {
+          type: "button",
+          action_id: "todo_reopen_click",
+          text: { type: "plain_text", text: "↩️ Reopen", emoji: true },
+          value: t.id,
+        },
+      });
+    }
+  }
+
+  return {
+    type: "home",
+    blocks,
   };
 }
 
@@ -800,6 +1170,11 @@ export interface SlackApiClient {
     token: string,
     triggerId: string,
     view: SlackModalView,
+  ): Promise<SlackApiResponse>;
+  publishView(
+    token: string,
+    userId: string,
+    view: SlackHomeView | Record<string, unknown>,
   ): Promise<SlackApiResponse>;
   postMessage(
     token: string,
@@ -847,6 +1222,23 @@ export const slackApi: SlackApiClient = {
         "Content-Type": "application/json; charset=utf-8",
       },
       body: JSON.stringify({ trigger_id: triggerId, view }),
+    });
+    return await res.json();
+  },
+
+  async publishView(
+    token: string,
+    userId: string,
+    view: SlackHomeView | Record<string, unknown>,
+  ): Promise<SlackApiResponse> {
+    const baseUrl = getSlackApiUrl();
+    const res = await fetch(`${baseUrl}/views.publish`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "Content-Type": "application/json; charset=utf-8",
+      },
+      body: JSON.stringify({ user_id: userId, view }),
     });
     return await res.json();
   },

@@ -20,6 +20,7 @@ import {
 import {
   buildQueuePromotionMessage,
   buildQueueTimeoutWarningMessage,
+  buildTodoCompletedNotificationMessage,
   slackApi,
   type SlackMessagePayload,
 } from "@suite/slack-kit";
@@ -352,6 +353,54 @@ export async function processOutboxEvent(
                 syncErr,
               );
             }
+          }
+        }
+      }
+      break;
+    }
+
+    case "todo.completed_notification": {
+      const {
+        todoId,
+        title,
+        creatorSlackUserId,
+        completedBySlackUserId,
+        channelId,
+        sourcePermalink,
+      } = event.payload as {
+        todoId?: string;
+        title?: string;
+        creatorSlackUserId?: string;
+        assigneeSlackUserId?: string;
+        completedBySlackUserId?: string;
+        channelId?: string;
+        sourcePermalink?: string;
+      };
+
+      console.log(
+        `[${WORKER_ID}] Dispatching todo completion notification for todo ${todoId} to creator ${creatorSlackUserId}`,
+      );
+
+      if (creatorSlackUserId && title && completedBySlackUserId) {
+        const botToken = await resolveBotToken(event.workspace_id, "todo");
+        if (botToken) {
+          const notifMsg = buildTodoCompletedNotificationMessage({
+            todoId: todoId ?? "",
+            title,
+            completedByUserId: completedBySlackUserId,
+            creatorUserId: creatorSlackUserId,
+            channelId,
+            sourcePermalink,
+          });
+
+          const target = channelId || creatorSlackUserId;
+          const res = await slackApi.postMessage(botToken, target, notifMsg);
+          if (!res.ok) {
+            throw new Error(
+              `Slack chat.postMessage failed for todo notification: ${
+                res.error ?? "unknown error"
+              }`,
+            );
           }
         }
       }
