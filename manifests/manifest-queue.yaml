@@ -1,0 +1,32 @@
+display_information:
+  name: "Queue"
+  description: "Manage staging deploy queues, environment locks, and concurrency with live status cards."
+  background_color: "#166534"
+  long_description: "Eliminate deploy collisions and noisy channel chatter. Lock shared environments with fair FIFO queues, live elapsed timers, automatic handoff, and 5-minute timeout warnings."
+
+features:
+  bot_user:
+    display_name: "Queue"
+    always_online: true
+  slash_commands:
+    - command: "/queue"
+      url: "https://your-domain.com/slack/commands"
+      description: "Manage channel deployment queues and resource locks"
+      usage_hint: "[join | done | extend | kick | status | help]"
+      should_escape: false
+
+oauth_config:
+  scopes:
+    bot:
+      - commands
+      - chat:write
+      - chat:write.public
+      - users:read
+
+settings:
+  interactivity:
+    is_enabled: true
+    request_url: "https://your-domain.com/slack/interactions"
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false

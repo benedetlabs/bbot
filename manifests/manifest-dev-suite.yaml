@@ -1,0 +1,50 @@
+display_information:
+  name: "BenedetLabs Suite (Dev)"
+  description: "Unified micro-utility suite for local testing (Secret, Queue & Todo)."
+  background_color: "#4A154B"
+  long_description: "All-in-one development app bundling Secret, Queue, and Todo for local development and staging testing."
+
+features:
+  bot_user:
+    display_name: "Suite Bot"
+    always_online: true
+  shortcuts:
+    - name: "Add to To-Dos"
+      type: "message"
+      callback_id: "todo_create_from_message"
+      description: "Convert this message into a task"
+  slash_commands:
+    - command: "/secret"
+      url: "https://your-domain.com/slack/commands"
+      description: "Share an ephemeral encrypted secret"
+      usage_hint: "[optional text or empty for modal]"
+      should_escape: false
+    - command: "/queue"
+      url: "https://your-domain.com/slack/commands"
+      description: "Manage channel deployment queue"
+      usage_hint: "[join | done | extend | kick | status]"
+      should_escape: false
+    - command: "/todo"
+      url: "https://your-domain.com/slack/commands"
+      description: "Create and schedule a task"
+      usage_hint: "[task title with natural date]"
+      should_escape: false
+  app_home:
+    home_tab_enabled: true
+    messages_tab_enabled: false
+
+oauth_config:
+  scopes:
+    bot:
+      - commands
+      - chat:write
+      - chat:write.public
+      - users:read
+
+settings:
+  interactivity:
+    is_enabled: true
+    request_url: "https://your-domain.com/slack/interactions"
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false
