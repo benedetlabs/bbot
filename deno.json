@@ -34,7 +34,8 @@
     "dev:secret": "deno run --allow-net --allow-env --watch apps/secret-app/main.ts",
     "dev:queue": "deno run --allow-net --allow-env --watch apps/queue-app/main.ts",
     "dev:todo": "deno run --allow-net --allow-env --watch apps/todo-app/main.ts",
-    "dev:worker": "deno run --allow-net --allow-env --watch apps/outbox-worker/main.ts"
+    "dev:worker": "deno run --allow-net --allow-env --watch apps/outbox-worker/main.ts",
+    "simulate": "deno run --allow-net --allow-env scripts/simulate_slack.ts"
   },
   "lint": {
     "rules": {
