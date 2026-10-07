@@ -673,6 +673,30 @@ export async function runAutomatedVerification(): Promise<boolean> {
     console.log("🐘 Local PostgreSQL (:5432) is online; using live database.");
   }
 
+  // Spin up an ephemeral in-process mock Slack API server to capture and verify Slack API requests
+  const capturedSlackCalls: Array<{ path: string; body: unknown }> = [];
+  const mockSlackServer = Deno.serve(
+    { port: 0, onListen: () => {} },
+    async (req) => {
+      const url = new URL(req.url);
+      let body: unknown = null;
+      try {
+        const text = await req.text();
+        body = JSON.parse(text);
+      } catch {
+        // Not JSON
+      }
+      capturedSlackCalls.push({ path: url.pathname, body });
+      return new Response(
+        JSON.stringify({ ok: true, ts: "1700000000.000100" }),
+        { headers: { "Content-Type": "application/json" } },
+      );
+    },
+  );
+  const mockSlackPort = (mockSlackServer.addr as Deno.NetAddr).port;
+  const prevSlackApiUrl = Deno.env.get("SLACK_API_URL");
+  Deno.env.set("SLACK_API_URL", `http://localhost:${mockSlackPort}`);
+
   // Set mock bot tokens if not set to prevent unconfigured warnings in automated run
   if (!Deno.env.get("SECRET_APP_BOT_TOKEN")) {
     Deno.env.set("SECRET_APP_BOT_TOKEN", "xoxb-sim-secret");
@@ -699,171 +723,210 @@ export async function runAutomatedVerification(): Promise<boolean> {
     }
   }
 
-  // 1. Secret App Simulations
-  console.log("\n📦 1. Testing Secret App (/secret):");
   try {
-    const secRes = await simulateSlashCommand({
-      appKey: "secret",
-      command: "/secret",
-    });
-    record(
-      "Secret App: /secret returns modal prompt or acknowledges command",
-      secRes.status === 200,
-      `Status: ${secRes.status}`,
-    );
+    // 1. Secret App Simulations
+    console.log("\n📦 1. Testing Secret App (/secret):");
+    try {
+      const secRes = await simulateSlashCommand({
+        appKey: "secret",
+        command: "/secret",
+      });
+      record(
+        "Secret App: /secret returns modal prompt or acknowledges command",
+        secRes.status === 200,
+        `Status: ${secRes.status}`,
+      );
 
-    const secModRes = await simulateViewSubmission({
-      appKey: "secret",
-      callbackId: "create_secret_modal",
-      values: {
-        secret_content_block: {
-          secret_content_input: { value: "TopSecret123" },
+      const secModRes = await simulateViewSubmission({
+        appKey: "secret",
+        callbackId: "secret_create_modal",
+        values: {
+          secret_content_block: {
+            secret_content_input: { value: "TopSecret123" },
+          },
         },
-      },
-    });
-    record(
-      "Secret App: modal submission validated successfully",
-      secModRes.status === 200,
-      `Status: ${secModRes.status}`,
-    );
-  } catch (err) {
-    record("Secret App simulations", false, String(err));
-  }
+      });
+      record(
+        "Secret App: modal submission validated successfully",
+        secModRes.status === 200,
+        `Status: ${secModRes.status}`,
+      );
+    } catch (err) {
+      record("Secret App simulations", false, String(err));
+    }
 
-  // 2. Queue App Simulations
-  console.log("\n🚦 2. Testing Queue App (/queue):");
-  try {
-    const qHelpRes = await simulateSlashCommand({
-      appKey: "queue",
-      command: "/queue",
-      text: "help",
-    });
-    record(
-      "Queue App: /queue help returns guidance",
-      qHelpRes.status === 200 && qHelpRes.text.includes("Queue Commands:"),
-      `Status: ${qHelpRes.status}`,
-    );
+    // 2. Queue App Simulations
+    console.log("\n🚦 2. Testing Queue App (/queue):");
+    try {
+      const qHelpRes = await simulateSlashCommand({
+        appKey: "queue",
+        command: "/queue",
+        text: "help",
+      });
+      record(
+        "Queue App: /queue help returns guidance",
+        qHelpRes.status === 200 && qHelpRes.text.includes("Queue Commands:"),
+        `Status: ${qHelpRes.status}`,
+      );
 
-    const qStatusRes = await simulateSlashCommand({
-      appKey: "queue",
-      command: "/queue",
-      text: "status",
-    });
-    record(
-      "Queue App: /queue status renders card",
-      qStatusRes.status === 200,
-      `Status: ${qStatusRes.status}`,
-    );
+      const qStatusRes = await simulateSlashCommand({
+        appKey: "queue",
+        command: "/queue",
+        text: "status",
+      });
+      record(
+        "Queue App: /queue status renders card",
+        qStatusRes.status === 200,
+        `Status: ${qStatusRes.status}`,
+      );
 
-    const qJoinRes = await simulateSlashCommand({
-      appKey: "queue",
-      command: "/queue",
-      text: "join Deploy v2",
-    });
-    record(
-      "Queue App: /queue join processes entry",
-      qJoinRes.status === 200,
-      `Status: ${qJoinRes.status}`,
-    );
+      const qJoinRes = await simulateSlashCommand({
+        appKey: "queue",
+        command: "/queue",
+        text: "join Deploy v2",
+      });
+      record(
+        "Queue App: /queue join processes entry",
+        qJoinRes.status === 200,
+        `Status: ${qJoinRes.status}`,
+      );
 
-    const qActionRes = await simulateBlockAction({
-      appKey: "queue",
-      actionId: "queue_join_click",
-      value: "queue-test",
-    });
-    record(
-      "Queue App: block action queue_join_click handled",
-      qActionRes.status === 200,
-      `Status: ${qActionRes.status}`,
-    );
-  } catch (err) {
-    record("Queue App simulations", false, String(err));
-  }
+      const qActionRes = await simulateBlockAction({
+        appKey: "queue",
+        actionId: "queue_join_click",
+        value: "queue-test",
+      });
+      record(
+        "Queue App: block action queue_join_click handled",
+        qActionRes.status === 200,
+        `Status: ${qActionRes.status}`,
+      );
+    } catch (err) {
+      record("Queue App simulations", false, String(err));
+    }
 
-  // 3. Todo App Simulations
-  console.log("\n📋 3. Testing Todo App (/todo):");
-  try {
-    const todoHelpRes = await simulateSlashCommand({
-      appKey: "todo",
-      command: "/todo",
-      text: "help",
-    });
-    record(
-      "Todo App: /todo help guidance",
-      todoHelpRes.status === 200 && todoHelpRes.text.includes("Commands:"),
-      `Status: ${todoHelpRes.status}`,
-    );
+    // 3. Todo App Simulations
+    console.log("\n📋 3. Testing Todo App (/todo):");
+    try {
+      const todoHelpRes = await simulateSlashCommand({
+        appKey: "todo",
+        command: "/todo",
+        text: "help",
+      });
+      record(
+        "Todo App: /todo help guidance",
+        todoHelpRes.status === 200 && todoHelpRes.text.includes("Commands:"),
+        `Status: ${todoHelpRes.status}`,
+      );
 
-    const todoCmdRes = await simulateSlashCommand({
-      appKey: "todo",
-      command: "/todo",
-      text: "Review PR tomorrow at 3pm",
-    });
-    record(
-      "Todo App: /todo parses natural date and creates task",
-      todoCmdRes.status === 200 && todoCmdRes.text.includes("Review PR"),
-      `Status: ${todoCmdRes.status}`,
-    );
+      const todoCmdRes = await simulateSlashCommand({
+        appKey: "todo",
+        command: "/todo",
+        text: "Review PR tomorrow at 3pm",
+      });
+      const createdTodoId = (todoCmdRes.json as {
+        blocks?: Array<{ accessory?: { value?: string } }>;
+      })?.blocks?.[0]?.accessory?.value;
 
-    const todoDelegatedRes = await simulateSlashCommand({
-      appKey: "todo",
-      command: "/todo",
-      text: "<@U_BOB|bob> Update documentation by Friday",
-    });
-    record(
-      "Todo App: /todo delegated task returns in_channel card",
-      todoDelegatedRes.status === 200 &&
-        todoDelegatedRes.text.includes("Update documentation"),
-      `Status: ${todoDelegatedRes.status}`,
-    );
+      record(
+        "Todo App: /todo parses natural date and creates task",
+        todoCmdRes.status === 200 && todoCmdRes.text.includes("Review PR") &&
+          Boolean(createdTodoId),
+        `Status: ${todoCmdRes.status}, TodoId: ${createdTodoId}`,
+      );
 
-    const todoShortcutRes = await simulateMessageAction({
-      appKey: "todo",
-      callbackId: "todo_create_from_message",
-      messageText: "Please investigate high latency spike",
-    });
-    record(
-      "Todo App: message shortcut todo_create_from_message opens modal",
-      todoShortcutRes.status === 200,
-      `Status: ${todoShortcutRes.status}`,
-    );
+      const todoDelegatedRes = await simulateSlashCommand({
+        appKey: "todo",
+        command: "/todo",
+        text: "<@U_BOB|bob> Update documentation by Friday",
+      });
+      record(
+        "Todo App: /todo delegated task returns in_channel card",
+        todoDelegatedRes.status === 200 &&
+          todoDelegatedRes.text.includes("Update documentation"),
+        `Status: ${todoDelegatedRes.status}`,
+      );
 
-    const todoModalRes = await simulateViewSubmission({
-      appKey: "todo",
-      callbackId: "todo_create_modal",
-      values: {
-        title_block: { title_input: { value: "Refactor auth middleware" } },
-      },
-    });
-    record(
-      "Todo App: modal submission todo_create_modal creates task",
-      todoModalRes.status === 200,
-      `Status: ${todoModalRes.status}`,
-    );
+      const todoShortcutRes = await simulateMessageAction({
+        appKey: "todo",
+        callbackId: "todo_create_from_message",
+        messageText: "Please investigate high latency spike",
+      });
+      record(
+        "Todo App: message shortcut todo_create_from_message opens modal",
+        todoShortcutRes.status === 200,
+        `Status: ${todoShortcutRes.status}`,
+      );
 
-    const todoActionRes = await simulateBlockAction({
-      appKey: "todo",
-      actionId: "todo_complete_click",
-      value: "00000000-0000-0000-0000-000000000001",
-      containerType: "view",
-    });
-    record(
-      "Todo App: block action todo_complete_click handled in Home view",
-      todoActionRes.status === 200,
-      `Status: ${todoActionRes.status}`,
-    );
+      const todoModalRes = await simulateViewSubmission({
+        appKey: "todo",
+        callbackId: "todo_create_modal",
+        values: {
+          title_block: { title_input: { value: "Refactor auth middleware" } },
+        },
+      });
+      record(
+        "Todo App: modal submission todo_create_modal creates task",
+        todoModalRes.status === 200,
+        `Status: ${todoModalRes.status}`,
+      );
 
-    const todoHomeRes = await simulateAppHomeOpened({
-      appKey: "todo",
-      userId: "U_USER_TEST",
-    });
-    record(
-      "Todo App: app_home_opened event renders GTD view",
-      todoHomeRes.status === 200,
-      `Status: ${todoHomeRes.status}`,
-    );
-  } catch (err) {
-    record("Todo App simulations", false, String(err));
+      // Test block actions with the real created task ID
+      const targetTodoId = createdTodoId ??
+        "00000000-0000-0000-0000-000000000001";
+      const todoActionRes = await simulateBlockAction({
+        appKey: "todo",
+        actionId: "todo_complete_click",
+        value: targetTodoId,
+        containerType: "view",
+      });
+      record(
+        "Todo App: block action todo_complete_click handled in Home view",
+        todoActionRes.status === 200,
+        `Status: ${todoActionRes.status}`,
+      );
+
+      const todoReopenRes = await simulateBlockAction({
+        appKey: "todo",
+        actionId: "todo_reopen_click",
+        value: targetTodoId,
+        containerType: "view",
+      });
+      record(
+        "Todo App: block action todo_reopen_click handled in Home view",
+        todoReopenRes.status === 200,
+        `Status: ${todoReopenRes.status}`,
+      );
+
+      const todoHomeRes = await simulateAppHomeOpened({
+        appKey: "todo",
+        userId: "U_USER_TEST",
+      });
+      record(
+        "Todo App: app_home_opened event renders GTD view",
+        todoHomeRes.status === 200,
+        `Status: ${todoHomeRes.status}`,
+      );
+
+      // Verify that views.publish was dispatched to Slack API
+      const publishCalls = capturedSlackCalls.filter((c) =>
+        c.path.includes("views.publish")
+      );
+      record(
+        "Todo App: views.publish dispatched to Slack API",
+        publishCalls.length > 0,
+        `Count: ${publishCalls.length}`,
+      );
+    } catch (err) {
+      record("Todo App simulations", false, String(err));
+    }
+  } finally {
+    await mockSlackServer.shutdown();
+    if (prevSlackApiUrl) {
+      Deno.env.set("SLACK_API_URL", prevSlackApiUrl);
+    } else {
+      Deno.env.delete("SLACK_API_URL");
+    }
   }
 
   console.log("\n------------------------------------------------------------");

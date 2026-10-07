@@ -380,6 +380,7 @@ Deno.test("slack-kit: buildTodoHomeView renders GTD sections and stats", () => {
     gtd: {
       today: [{ id: "t1", title: "Task 1", due_at: new Date() }],
       overdue: [{ id: "t2", title: "Task 2", due_at: new Date() }],
+      inbox: [{ id: "t_inbox", title: "Inbox Task 1", due_at: null }],
       delegatedToMe: [{
         id: "t3",
         title: "Task 3",
@@ -396,6 +397,32 @@ Deno.test("slack-kit: buildTodoHomeView renders GTD sections and stats", () => {
 
   assertEquals(homeView.type, "home");
   assertEquals(homeView.blocks.length > 5, true);
+
+  // Verify Inbox is rendered
+  const hasInboxSection = homeView.blocks.some((b) =>
+    (b as { text?: { text?: string } })?.text?.text?.includes(
+      "Inbox & Upcoming",
+    )
+  );
+  assertEquals(hasInboxSection, true);
+
+  // Verify 100-block limit safeguard
+  const manyTasks = Array.from({ length: 60 }, (_, i) => ({
+    id: `task_${i}`,
+    title: `Task #${i}`,
+    due_at: new Date(),
+  }));
+  const largeHomeView = buildTodoHomeView({
+    userId: "U_TEST",
+    gtd: {
+      today: manyTasks,
+      overdue: manyTasks,
+      delegatedToMe: [],
+      delegatedByMe: [],
+      completed: [],
+    },
+  });
+  assertEquals(largeHomeView.blocks.length <= 95, true);
 });
 
 Deno.test("slack-kit: buildTodoCompletedNotificationMessage formats accountability notice", () => {

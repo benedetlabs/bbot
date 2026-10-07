@@ -758,6 +758,9 @@ export function buildTodoCard(params: {
     ? `\n🔗 <${params.sourcePermalink}|Jump to source>`
     : "";
   const isCompleted = params.status === "completed";
+  const delegationText = params.assigneeSlackId === params.creatorSlackId
+    ? `*Assignee:* <@${params.assigneeSlackId}>`
+    : `*Assignee:* <@${params.assigneeSlackId}> (created by <@${params.creatorSlackId}>)`;
 
   return {
     text: `📋 ${isCompleted ? "Completed Task" : "Task"}: ${params.title}`,
@@ -768,7 +771,7 @@ export function buildTodoCard(params: {
           type: "mrkdwn",
           text: `📋 *Task:* ${
             isCompleted ? `~${params.title}~` : params.title
-          }\n*Assignee:* <@${params.assigneeSlackId}> (created by <@${params.creatorSlackId}>)${due}${link}`,
+          }\n${delegationText}${due}${link}`,
         },
         accessory: isCompleted
           ? {
@@ -927,22 +930,32 @@ export function buildTodoHomeView(params: {
       title: string;
       creator_slack_user_id: string;
       due_at?: Date | null;
+      source_permalink?: string | null;
     }>;
     delegatedByMe: Array<{
       id: string;
       title: string;
       assignee_slack_user_id: string;
       due_at?: Date | null;
+      source_permalink?: string | null;
     }>;
     completed: Array<{
       id: string;
       title: string;
       completed_at?: Date | null;
+      source_permalink?: string | null;
     }>;
-    inbox?: Array<{ id: string; title: string; due_at?: Date | null }>;
+    inbox?: Array<{
+      id: string;
+      title: string;
+      due_at?: Date | null;
+      source_permalink?: string | null;
+    }>;
   };
 }): SlackHomeView {
   const { userId, gtd } = params;
+  const inboxList = gtd.inbox ?? [];
+
   const blocks: SlackBlock[] = [
     {
       type: "header",
@@ -954,7 +967,7 @@ export function buildTodoHomeView(params: {
         {
           type: "mrkdwn",
           text:
-            `👋 Hello <@${userId}>  •  📅 Today: *${gtd.today.length}*  •  🔥 Overdue: *${gtd.overdue.length}*  •  🤝 Delegated: *${
+            `👋 Hello <@${userId}>  •  📥 Inbox: *${inboxList.length}*  •  📅 Today: *${gtd.today.length}*  •  🔥 Overdue: *${gtd.overdue.length}*  •  🤝 Delegated: *${
               gtd.delegatedToMe.length + gtd.delegatedByMe.length
             }*  •  ✅ Completed: *${gtd.completed.length}*`,
         },
@@ -975,28 +988,114 @@ export function buildTodoHomeView(params: {
     { type: "divider" },
   ];
 
+  // Helper to ensure view never exceeds Slack's 100-block limit
+  let truncatedNoticeAdded = false;
+  const canAddBlock = () => {
+    if (blocks.length >= 90) {
+      if (!truncatedNoticeAdded) {
+        blocks.push({
+          type: "context",
+          elements: [
+            {
+              type: "mrkdwn",
+              text:
+                "⚠️ _Some older or lower-priority tasks were truncated to fit Slack's 100-block limit._",
+            },
+          ],
+        });
+        truncatedNoticeAdded = true;
+      }
+      return false;
+    }
+    return true;
+  };
+
   // 1. 🔥 OVERDUE
-  blocks.push({
-    type: "section",
-    text: { type: "mrkdwn", text: `*🔥 Overdue (${gtd.overdue.length})*` },
-  });
-  if (gtd.overdue.length === 0) {
+  if (canAddBlock()) {
+    blocks.push({
+      type: "section",
+      text: { type: "mrkdwn", text: `*🔥 Overdue (${gtd.overdue.length})*` },
+    });
+    if (gtd.overdue.length === 0) {
+      blocks.push({
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: "_No overdue tasks! You're completely up to date._",
+        },
+      });
+    } else {
+      for (const t of gtd.overdue) {
+        if (!canAddBlock()) break;
+        const dueStr = t.due_at
+          ? ` ⏰ _${new Date(t.due_at).toLocaleDateString()}_`
+          : "";
+        const link = t.source_permalink ? ` <${t.source_permalink}|🔗>` : "";
+        blocks.push({
+          type: "section",
+          text: { type: "mrkdwn", text: `🔴 *${t.title}*${dueStr}${link}` },
+          accessory: {
+            type: "button",
+            action_id: "todo_complete_click",
+            text: { type: "plain_text", text: "✅ Done", emoji: true },
+            style: "primary",
+            value: t.id,
+          },
+        });
+      }
+    }
+    blocks.push({ type: "divider" });
+  }
+
+  // 2. 📅 TODAY
+  if (canAddBlock()) {
+    blocks.push({
+      type: "section",
+      text: { type: "mrkdwn", text: `*📅 Today (${gtd.today.length})*` },
+    });
+    if (gtd.today.length === 0) {
+      blocks.push({
+        type: "section",
+        text: { type: "mrkdwn", text: "_No tasks scheduled for today._" },
+      });
+    } else {
+      for (const t of gtd.today) {
+        if (!canAddBlock()) break;
+        const link = t.source_permalink ? ` <${t.source_permalink}|🔗>` : "";
+        blocks.push({
+          type: "section",
+          text: { type: "mrkdwn", text: `📌 *${t.title}*${link}` },
+          accessory: {
+            type: "button",
+            action_id: "todo_complete_click",
+            text: { type: "plain_text", text: "✅ Done", emoji: true },
+            style: "primary",
+            value: t.id,
+          },
+        });
+      }
+    }
+    blocks.push({ type: "divider" });
+  }
+
+  // 3. 📥 INBOX & UPCOMING (Personal unscheduled or future tasks)
+  if (canAddBlock() && inboxList.length > 0) {
     blocks.push({
       type: "section",
       text: {
         type: "mrkdwn",
-        text: "_No overdue tasks! You're completely up to date._",
+        text: `*📥 Inbox & Upcoming (${inboxList.length})*`,
       },
     });
-  } else {
-    for (const t of gtd.overdue) {
+    for (const t of inboxList) {
+      if (!canAddBlock()) break;
       const dueStr = t.due_at
         ? ` ⏰ _${new Date(t.due_at).toLocaleDateString()}_`
         : "";
       const link = t.source_permalink ? ` <${t.source_permalink}|🔗>` : "";
       blocks.push({
         type: "section",
-        text: { type: "mrkdwn", text: `🔴 *${t.title}*${dueStr}${link}` },
+        text: { type: "mrkdwn", text: `📝 *${t.title}*${dueStr}${link}` },
         accessory: {
           type: "button",
           action_id: "todo_complete_click",
@@ -1006,128 +1105,116 @@ export function buildTodoHomeView(params: {
         },
       });
     }
+    blocks.push({ type: "divider" });
   }
 
-  blocks.push({ type: "divider" });
-
-  // 2. 📅 TODAY
-  blocks.push({
-    type: "section",
-    text: { type: "mrkdwn", text: `*📅 Today (${gtd.today.length})*` },
-  });
-  if (gtd.today.length === 0) {
-    blocks.push({
-      type: "section",
-      text: { type: "mrkdwn", text: "_No tasks scheduled for today._" },
-    });
-  } else {
-    for (const t of gtd.today) {
-      const link = t.source_permalink ? ` <${t.source_permalink}|🔗>` : "";
-      blocks.push({
-        type: "section",
-        text: { type: "mrkdwn", text: `📌 *${t.title}*${link}` },
-        accessory: {
-          type: "button",
-          action_id: "todo_complete_click",
-          text: { type: "plain_text", text: "✅ Done", emoji: true },
-          style: "primary",
-          value: t.id,
-        },
-      });
-    }
-  }
-
-  blocks.push({ type: "divider" });
-
-  // 3. 🤝 DELEGATED TO ME
-  blocks.push({
-    type: "section",
-    text: {
-      type: "mrkdwn",
-      text: `*🤝 Delegated to Me (${gtd.delegatedToMe.length})*`,
-    },
-  });
-  if (gtd.delegatedToMe.length === 0) {
-    blocks.push({
-      type: "section",
-      text: { type: "mrkdwn", text: "_No tasks delegated to you._" },
-    });
-  } else {
-    for (const t of gtd.delegatedToMe) {
-      blocks.push({
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text: `👤 *${t.title}* (from <@${t.creator_slack_user_id}>)`,
-        },
-        accessory: {
-          type: "button",
-          action_id: "todo_complete_click",
-          text: { type: "plain_text", text: "✅ Done", emoji: true },
-          style: "primary",
-          value: t.id,
-        },
-      });
-    }
-  }
-
-  blocks.push({ type: "divider" });
-
-  // 4. 📤 DELEGATED BY ME
-  blocks.push({
-    type: "section",
-    text: {
-      type: "mrkdwn",
-      text: `*📤 Delegated by Me (${gtd.delegatedByMe.length})*`,
-    },
-  });
-  if (gtd.delegatedByMe.length === 0) {
+  // 4. 🤝 DELEGATED TO ME
+  if (canAddBlock()) {
     blocks.push({
       type: "section",
       text: {
         type: "mrkdwn",
-        text: "_You haven't assigned tasks to others._",
+        text: `*🤝 Delegated to Me (${gtd.delegatedToMe.length})*`,
       },
     });
-  } else {
-    for (const t of gtd.delegatedByMe) {
+    if (gtd.delegatedToMe.length === 0) {
+      blocks.push({
+        type: "section",
+        text: { type: "mrkdwn", text: "_No tasks delegated to you._" },
+      });
+    } else {
+      for (const t of gtd.delegatedToMe) {
+        if (!canAddBlock()) break;
+        const dueStr = t.due_at
+          ? ` ⏰ _${new Date(t.due_at).toLocaleDateString()}_`
+          : "";
+        const link = t.source_permalink ? ` <${t.source_permalink}|🔗>` : "";
+        blocks.push({
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text:
+              `👤 *${t.title}* (from <@${t.creator_slack_user_id}>)${dueStr}${link}`,
+          },
+          accessory: {
+            type: "button",
+            action_id: "todo_complete_click",
+            text: { type: "plain_text", text: "✅ Done", emoji: true },
+            style: "primary",
+            value: t.id,
+          },
+        });
+      }
+    }
+    blocks.push({ type: "divider" });
+  }
+
+  // 5. 📤 DELEGATED BY ME
+  if (canAddBlock()) {
+    blocks.push({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `*📤 Delegated by Me (${gtd.delegatedByMe.length})*`,
+      },
+    });
+    if (gtd.delegatedByMe.length === 0) {
       blocks.push({
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `⏳ *${t.title}* ➔ assigned to <@${t.assignee_slack_user_id}>`,
+          text: "_You haven't assigned tasks to others._",
         },
       });
+    } else {
+      for (const t of gtd.delegatedByMe) {
+        if (!canAddBlock()) break;
+        const dueStr = t.due_at
+          ? ` ⏰ _${new Date(t.due_at).toLocaleDateString()}_`
+          : "";
+        const link = t.source_permalink ? ` <${t.source_permalink}|🔗>` : "";
+        blocks.push({
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text:
+              `⏳ *${t.title}* ➔ assigned to <@${t.assignee_slack_user_id}>${dueStr}${link}`,
+          },
+        });
+      }
     }
+    blocks.push({ type: "divider" });
   }
 
-  blocks.push({ type: "divider" });
-
-  // 5. ✅ RECENTLY COMPLETED
-  blocks.push({
-    type: "section",
-    text: {
-      type: "mrkdwn",
-      text: `*✅ Recently Completed (${gtd.completed.length})*`,
-    },
-  });
-  if (gtd.completed.length === 0) {
+  // 6. ✅ RECENTLY COMPLETED
+  if (canAddBlock()) {
     blocks.push({
       type: "section",
-      text: { type: "mrkdwn", text: "_No completed tasks recorded._" },
+      text: {
+        type: "mrkdwn",
+        text: `*✅ Recently Completed (${gtd.completed.length})*`,
+      },
     });
-  } else {
-    for (const t of gtd.completed) {
+    if (gtd.completed.length === 0) {
       blocks.push({
         type: "section",
-        text: { type: "mrkdwn", text: `~${t.title}~` },
-        accessory: {
-          type: "button",
-          action_id: "todo_reopen_click",
-          text: { type: "plain_text", text: "↩️ Reopen", emoji: true },
-          value: t.id,
-        },
+        text: { type: "mrkdwn", text: "_No completed tasks recorded._" },
       });
+    } else {
+      for (const t of gtd.completed) {
+        if (!canAddBlock()) break;
+        const link = t.source_permalink ? ` <${t.source_permalink}|🔗>` : "";
+        blocks.push({
+          type: "section",
+          text: { type: "mrkdwn", text: `~${t.title}~${link}` },
+          accessory: {
+            type: "button",
+            action_id: "todo_reopen_click",
+            text: { type: "plain_text", text: "↩️ Reopen", emoji: true },
+            value: t.id,
+          },
+        });
+      }
     }
   }
 

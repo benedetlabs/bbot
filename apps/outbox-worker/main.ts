@@ -394,7 +394,15 @@ export async function processOutboxEvent(
           });
 
           const target = channelId || creatorSlackUserId;
-          const res = await slackApi.postMessage(botToken, target, notifMsg);
+          let res = await slackApi.postMessage(botToken, target, notifMsg);
+          if (!res.ok && channelId && creatorSlackUserId) {
+            // Fallback to direct message if posting to channel fails (e.g. not in channel)
+            res = await slackApi.postMessage(
+              botToken,
+              creatorSlackUserId,
+              notifMsg,
+            );
+          }
           if (!res.ok) {
             throw new Error(
               `Slack chat.postMessage failed for todo notification: ${

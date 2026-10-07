@@ -42,6 +42,10 @@ oauth_config:
       - users:read
 
 settings:
+  event_subscriptions:
+    request_url: "https://your-domain.com/slack/events"
+    bot_events:
+      - app_home_opened
   interactivity:
     is_enabled: true
     request_url: "https://your-domain.com/slack/interactions"

@@ -211,6 +211,21 @@ export const todosRepo = {
 
       const existing = rows[0];
 
+      // Delegated accountability check:
+      // A todo is delegated if the creator assigned it to someone else, or
+      // completed by someone other than the creator.
+      const isDelegated = existing.creator_slack_user_id !==
+          params.completedBySlackUserId ||
+        existing.creator_slack_user_id !== existing.assignee_slack_user_id;
+
+      // Idempotency: If already completed, return existing record without re-emitting events
+      if (existing.status === "completed") {
+        return {
+          todo: existing,
+          isDelegated,
+        };
+      }
+
       const updatedRows = await tx<TodoRow[]>`
         UPDATE todos
         SET status = 'completed',
@@ -221,13 +236,6 @@ export const todosRepo = {
       `;
 
       const updated = updatedRows[0];
-
-      // Delegated accountability check:
-      // A todo is delegated if the creator assigned it to someone else, or
-      // completed by someone other than the creator.
-      const isDelegated = existing.creator_slack_user_id !==
-          params.completedBySlackUserId ||
-        existing.creator_slack_user_id !== existing.assignee_slack_user_id;
 
       let outboxEventId: string | undefined;
 
@@ -379,28 +387,30 @@ export const todosRepo = {
       const isCreator = item.creator_slack_user_id === params.userId;
       const dueDate = item.due_at ? new Date(item.due_at) : null;
 
-      // Delegated by me (I created it, assigned to someone else)
+      // 1. Delegated by me (I created it, assigned to someone else)
       if (isCreator && !isAssignee) {
         delegatedByMe.push(item);
+        continue;
       }
 
-      // Delegated to me (someone else assigned it to me)
+      // 2. Delegated to me (someone else created it and assigned it to me)
       if (isAssignee && !isCreator) {
         delegatedToMe.push(item);
+        continue;
       }
 
-      // Time-based classification for tasks assigned to me
-      if (isAssignee) {
+      // 3. Personal tasks (I created it and I am assigned to it)
+      if (isAssignee && isCreator) {
         if (dueDate) {
           if (dueDate < startOfToday) {
             overdue.push(item);
           } else if (dueDate <= endOfToday) {
             today.push(item);
-          } else if (isCreator) {
+          } else {
             // Future personal tasks belong in inbox/upcoming
             inbox.push(item);
           }
-        } else if (isCreator) {
+        } else {
           // Personal tasks without due date are in Inbox
           inbox.push(item);
         }
@@ -418,6 +428,28 @@ export const todosRepo = {
       const timeA = a.due_at ? new Date(a.due_at).getTime() : 0;
       const timeB = b.due_at ? new Date(b.due_at).getTime() : 0;
       return timeA - timeB;
+    });
+
+    // Sort delegatedToMe by due date if present (earliest first), then creation time
+    delegatedToMe.sort((a, b) => {
+      if (a.due_at && b.due_at) {
+        return new Date(a.due_at).getTime() - new Date(b.due_at).getTime();
+      }
+      if (a.due_at) return -1;
+      if (b.due_at) return 1;
+      return new Date(b.created_at).getTime() -
+        new Date(a.created_at).getTime();
+    });
+
+    // Sort delegatedByMe by due date if present, then creation time
+    delegatedByMe.sort((a, b) => {
+      if (a.due_at && b.due_at) {
+        return new Date(a.due_at).getTime() - new Date(b.due_at).getTime();
+      }
+      if (a.due_at) return -1;
+      if (b.due_at) return 1;
+      return new Date(b.created_at).getTime() -
+        new Date(a.created_at).getTime();
     });
 
     // Sort completed by completion date descending

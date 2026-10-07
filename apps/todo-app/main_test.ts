@@ -1,7 +1,7 @@
 import { assertEquals } from "@std/assert";
 import { app, getSigningSecret, parseTodoCommandText } from "./main.ts";
 import { mauRepo, todosRepo, workspacesRepo } from "@suite/db";
-import { slackApi } from "@suite/slack-kit";
+import { slackApi, type SlackMessagePayload } from "@suite/slack-kit";
 
 async function createSignedHeaders(
   body: string,
@@ -62,6 +62,18 @@ Deno.test("todo-app: parseTodoCommandText helper", () => {
   const res4 = parseTodoCommandText("by tomorrow", "U_DEFAULT");
   assertEquals(res4.title, "Untitled Task");
   assertEquals(res4.dueAt instanceof Date, true);
+
+  const res5 = parseTodoCommandText("Stand by", "U_DEFAULT");
+  assertEquals(res5.title, "Stand by");
+  assertEquals(res5.dueAt, null);
+
+  const res6 = parseTodoCommandText("Drop by the office", "U_DEFAULT");
+  assertEquals(res6.title, "Drop by the office");
+  assertEquals(res6.dueAt, null);
+
+  const res7 = parseTodoCommandText("Prepare slides for Friday", "U_DEFAULT");
+  assertEquals(res7.title, "Prepare slides");
+  assertEquals(res7.dueAt instanceof Date, true);
 });
 
 Deno.test("todo-app: GET /healthz returns ok status", async () => {
@@ -122,6 +134,48 @@ Deno.test("todo-app: /todo list returns empty state or tasks", async () => {
     const json = await res.json();
     assertEquals(json.response_type, "ephemeral");
     assertEquals(json.text.includes("You have no open tasks"), true);
+  } finally {
+    todosRepo.list = origList;
+  }
+});
+
+Deno.test("todo-app: /todo list returns open tasks when present", async () => {
+  const origList = todosRepo.list;
+  todosRepo.list = (() =>
+    Promise.resolve([
+      {
+        id: "00000000-0000-0000-0000-000000000001",
+        workspace_id: "00000000-0000-0000-0000-000000000001",
+        creator_slack_user_id: "U777",
+        assignee_slack_user_id: "U777",
+        slack_channel_id: "C777",
+        title: "Submit performance review",
+        source_permalink: null,
+        status: "open",
+        due_at: new Date("2026-10-20T12:00:00Z"),
+        completed_at: null,
+        completed_by_slack_user_id: null,
+        created_at: new Date(),
+      },
+    ])) as typeof todosRepo.list;
+
+  try {
+    const body =
+      "command=%2Ftodo&text=list&channel_id=C777&user_id=U777&team_id=T888";
+    const headers = await createSignedHeaders(body);
+
+    const req = new Request("http://localhost:8080/slack/commands", {
+      method: "POST",
+      headers,
+      body,
+    });
+
+    const res = await app.fetch(req);
+    assertEquals(res.status, 200);
+    const json = await res.json();
+    assertEquals(json.response_type, "ephemeral");
+    assertEquals(json.text.includes("Your Open Tasks:"), true);
+    assertEquals(json.text.includes("Submit performance review"), true);
   } finally {
     todosRepo.list = origList;
   }
@@ -518,6 +572,142 @@ Deno.test("todo-app: block actions complete and reopen todo", async () => {
     todosRepo.reopen = origReopen;
     todosRepo.getGTDGroups = origGetGTD;
     slackApi.publishView = origPublish;
+    Deno.env.delete("TODO_APP_BOT_TOKEN");
+  }
+});
+
+Deno.test("todo-app: block actions update message card in channel for complete and reopen", async () => {
+  let updatedCount = 0;
+  const updatedCards: Array<{
+    channelId: string;
+    ts: string;
+    message: SlackMessagePayload;
+  }> = [];
+  const origUpdateMessage = slackApi.updateMessage;
+  const origComplete = todosRepo.complete;
+  const origReopen = todosRepo.reopen;
+  const origGetById = todosRepo.getById;
+
+  const mockTodo = {
+    id: "00000000-0000-0000-0000-000000000001",
+    workspace_id: "ws-1",
+    creator_slack_user_id: "U_ALICE",
+    assignee_slack_user_id: "U_BOB",
+    slack_channel_id: "C_DEV",
+    title: "Implement feature X",
+    source_permalink: "https://slack.com/archives/C_DEV/p123",
+    status: "open" as const,
+    due_at: new Date("2026-10-25T12:00:00Z"),
+    completed_at: null,
+    completed_by_slack_user_id: null,
+    created_at: new Date(),
+  };
+
+  todosRepo.complete = (() => {
+    return Promise.resolve({
+      todo: {
+        ...mockTodo,
+        status: "completed" as const,
+        completed_at: new Date(),
+        completed_by_slack_user_id: "U_BOB",
+      },
+      isDelegated: true,
+    });
+  }) as typeof todosRepo.complete;
+
+  todosRepo.reopen = (() => {
+    return Promise.resolve({
+      ...mockTodo,
+      status: "open" as const,
+    });
+  }) as typeof todosRepo.reopen;
+
+  todosRepo.getById = (() => {
+    return Promise.resolve({
+      ...mockTodo,
+      status: "open" as const,
+    });
+  }) as typeof todosRepo.getById;
+
+  slackApi.updateMessage = ((token, channelId, ts, message) => {
+    updatedCount++;
+    updatedCards.push({ channelId, ts, message });
+    assertEquals(token, "xoxb-mock-token");
+    return Promise.resolve({ ok: true });
+  }) as typeof slackApi.updateMessage;
+
+  Deno.env.set("TODO_APP_BOT_TOKEN", "xoxb-mock-token");
+
+  try {
+    // 1. Click complete in a channel
+    const payloadComplete = {
+      type: "block_actions",
+      user: { id: "U_BOB" },
+      team: { id: "T888" },
+      channel: { id: "C_DEV" },
+      message: { ts: "1700000000.000100" },
+      actions: [{
+        action_id: "todo_complete_click",
+        value: mockTodo.id,
+      }],
+    };
+    const body1 = `payload=${
+      encodeURIComponent(JSON.stringify(payloadComplete))
+    }`;
+    const headers1 = await createSignedHeaders(body1);
+    const res1 = await app.fetch(
+      new Request("http://localhost:8080/slack/interactions", {
+        method: "POST",
+        headers: headers1,
+        body: body1,
+      }),
+    );
+    assertEquals(res1.status, 200);
+    assertEquals(updatedCount, 1);
+    assertEquals(updatedCards[0].channelId, "C_DEV");
+    assertEquals(updatedCards[0].ts, "1700000000.000100");
+    assertEquals(
+      Boolean(updatedCards[0].message.text?.includes("Completed Task")),
+      true,
+    );
+
+    // 2. Click reopen in a channel
+    const payloadReopen = {
+      type: "block_actions",
+      user: { id: "U_ALICE" },
+      team: { id: "T888" },
+      channel: { id: "C_DEV" },
+      message: { ts: "1700000000.000100" },
+      actions: [{
+        action_id: "todo_reopen_click",
+        value: mockTodo.id,
+      }],
+    };
+    const body2 = `payload=${
+      encodeURIComponent(JSON.stringify(payloadReopen))
+    }`;
+    const headers2 = await createSignedHeaders(body2);
+    const res2 = await app.fetch(
+      new Request("http://localhost:8080/slack/interactions", {
+        method: "POST",
+        headers: headers2,
+        body: body2,
+      }),
+    );
+    assertEquals(res2.status, 200);
+    assertEquals(updatedCount, 2);
+    assertEquals(updatedCards[1].channelId, "C_DEV");
+    assertEquals(
+      Boolean(
+        updatedCards[1].message.text?.includes("Task: Implement feature X"),
+      ),
+      true,
+    );
+  } finally {
+    todosRepo.complete = origComplete;
+    todosRepo.reopen = origReopen;
+    todosRepo.getById = origGetById;
+    slackApi.updateMessage = origUpdateMessage;
     Deno.env.delete("TODO_APP_BOT_TOKEN");
   }
 });

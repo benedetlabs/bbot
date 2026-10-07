@@ -100,16 +100,22 @@ export function parseTodoCommandText(
     const first = parsedDates[0];
     dueAt = first.start.date();
     rawDateText = first.text;
-    const beforeDate = cleaned.slice(0, first.index);
-    const afterDate = cleaned.slice(first.index + first.text.length);
+    let beforeDate = cleaned.slice(0, first.index).trim();
+    let afterDate = cleaned.slice(first.index + first.text.length).trim();
+
+    // Clean connecting prepositions linking to the date token (e.g. "by", "due by", "due to", "due", "at", "on", "before", "for")
+    beforeDate = beforeDate.replace(
+      /\s*(?:\b(?:by|due\s+by|due\s+to|due|at|on|before|for))\s*$/i,
+      "",
+    ).trim();
+    afterDate = afterDate.replace(
+      /^\s*(?:\b(?:by|due\s+by|due\s+to|due|at|on|before|for))\s*/i,
+      "",
+    ).trim();
+
     cleaned = `${beforeDate} ${afterDate}`.trim();
   }
 
-  // 3. Clean trailing / leading prepositions: "by", "due", "at", "on", "before"
-  cleaned = cleaned.replace(/\s+(?:by|due|at|on|before)\s*$/i, "");
-  cleaned = cleaned.replace(/^\s*(?:by|due|at|on|before)\s+/i, "");
-  cleaned = cleaned.replace(/^(?:by|due|at|on|before)\b/i, "").trim();
-  cleaned = cleaned.replace(/\b(?:by|due|at|on|before)$/i, "").trim();
   cleaned = cleaned.replace(/\s{2,}/g, " ").trim();
 
   if (!cleaned) {
@@ -476,6 +482,10 @@ app.post(
                 assigneeSlackId: completeRes.todo.assignee_slack_user_id,
                 creatorSlackId: completeRes.todo.creator_slack_user_id,
                 status: "completed",
+                dueAtFormatted: completeRes.todo.due_at
+                  ? new Date(completeRes.todo.due_at).toLocaleDateString()
+                  : undefined,
+                sourcePermalink: completeRes.todo.source_permalink ?? undefined,
               });
               await slackApi.updateMessage(
                 botToken,
@@ -495,7 +505,7 @@ app.post(
         const todoId = actionValue;
         if (todoId) {
           try {
-            await todosRepo.reopen(todoId);
+            const reopened = await todosRepo.reopen(todoId);
             if (
               payload.container?.type === "view" ||
               payload.view?.type === "home"
@@ -508,6 +518,27 @@ app.post(
               if (botToken) {
                 await slackApi.publishView(botToken, userId, homeView);
               }
+            } else if (
+              payload.channel?.id && payload.message?.ts && botToken && reopened
+            ) {
+              // Update in-place in channel
+              const updatedCard = buildTodoCard({
+                todoId: reopened.id,
+                title: reopened.title,
+                assigneeSlackId: reopened.assignee_slack_user_id,
+                creatorSlackId: reopened.creator_slack_user_id,
+                status: "open",
+                dueAtFormatted: reopened.due_at
+                  ? new Date(reopened.due_at).toLocaleDateString()
+                  : undefined,
+                sourcePermalink: reopened.source_permalink ?? undefined,
+              });
+              await slackApi.updateMessage(
+                botToken,
+                payload.channel.id,
+                payload.message.ts,
+                updatedCard,
+              ).catch(() => {});
             }
           } catch (err) {
             console.error("Failed to reopen todo:", err);
@@ -598,7 +629,19 @@ app.post(
       if (teamId) {
         try {
           const ws = await workspacesRepo.findBySlackTeamId(teamId);
-          if (ws) workspaceId = ws.id;
+          const workspace = ws ?? await workspacesRepo.upsert({
+            slackTeamId: teamId,
+            teamName: "Default Workspace",
+          });
+          workspaceId = workspace.id;
+
+          if (eventUserId) {
+            mauRepo.recordUserInteraction({
+              workspaceId,
+              slackUserId: eventUserId,
+              appSlug: "todo",
+            }).catch(() => {});
+          }
         } catch {
           // Fallback
         }

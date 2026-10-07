@@ -297,6 +297,17 @@ Deno.test("todosRepo: complete delegated task enqueues todo.completed_notificati
   assertEquals(event.payload.assigneeSlackUserId, "U_BOB");
   assertEquals(event.payload.completedBySlackUserId, "U_BOB");
   assertEquals(event.payload.channelId, "C999");
+
+  // Idempotency: completing again does NOT re-enqueue another outbox notification
+  const resRepeat = await todosRepo.complete(
+    {
+      id: todo.id,
+      completedBySlackUserId: "U_BOB",
+    },
+    mockSql,
+  );
+  assertEquals(resRepeat.todo.status, "completed");
+  assertEquals(outboxEvents.length, 1);
 });
 
 Deno.test("todosRepo: GTD grouping partitions Today, Overdue, Delegated, Completed, and Inbox", async () => {
@@ -334,13 +345,14 @@ Deno.test("todosRepo: GTD grouping partitions Today, Overdue, Delegated, Complet
     mockSql,
   );
 
-  // 3. Delegated to me by teammate
+  // 3. Delegated to me by teammate (with a deadline today)
   await todosRepo.create(
     {
       workspaceId: wsId,
       creatorSlackUserId: teammateId,
       assigneeSlackUserId: myUserId,
       title: "Review teammate architecture doc",
+      dueAt: todayDue,
     },
     mockSql,
   );
@@ -391,9 +403,11 @@ Deno.test("todosRepo: GTD grouping partitions Today, Overdue, Delegated, Complet
   assertEquals(groups.overdue.length, 1);
   assertEquals(groups.overdue[0].title, "Overdue report");
 
+  // Today must only contain the personal task, NOT the delegated task
   assertEquals(groups.today.length, 1);
   assertEquals(groups.today[0].title, "Submit standup update");
 
+  // Delegated to me contains the teammate task despite its due date
   assertEquals(groups.delegatedToMe.length, 1);
   assertEquals(
     groups.delegatedToMe[0].title,
