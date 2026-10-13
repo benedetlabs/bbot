@@ -33,6 +33,9 @@ spec:
         - podSelector:
             matchLabels:
               app: otel-node-collector
+        - podSelector:
+            matchLabels:
+              app: db-collector
       ports:
         - protocol: TCP
           port: 5432

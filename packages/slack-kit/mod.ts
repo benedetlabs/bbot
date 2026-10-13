@@ -570,6 +570,7 @@ export function buildQueueCard(params: {
   activeHolders: QueueHolder[];
   waitingLine: QueueWaiter[];
   maxConcurrency: number;
+  allowSecret?: boolean;
 }): SlackBlockMessagePayload {
   const activeCount = params.activeHolders.length;
   const header =
@@ -625,40 +626,56 @@ export function buildQueueCard(params: {
     });
   }
 
+  const actionElements: Record<string, unknown>[] = [
+    {
+      type: "button",
+      action_id: "queue_join_click",
+      text: { type: "plain_text", text: "🙋 Join Queue", emoji: true },
+      style: "primary",
+      value: params.queueId,
+    },
+    {
+      type: "button",
+      action_id: "queue_done_click",
+      text: { type: "plain_text", text: "✅ Done / Release", emoji: true },
+      value: params.queueId,
+    },
+    {
+      type: "button",
+      action_id: "queue_extend_click",
+      text: { type: "plain_text", text: "⏱️ +15m", emoji: true },
+      value: params.queueId,
+    },
+  ];
+
+  if (params.allowSecret) {
+    actionElements.push({
+      type: "button",
+      action_id: "queue_attach_secret_click",
+      text: {
+        type: "plain_text",
+        text: "🔐 Anexar Segredo Efêmero",
+        emoji: true,
+      },
+      value: params.queueId,
+    });
+  }
+
+  actionElements.push({
+    type: "button",
+    action_id: "queue_config_click",
+    text: {
+      type: "plain_text",
+      text: "⚙️ Configurar",
+      emoji: true,
+    },
+    value: params.queueId,
+  });
+
   blocks.push({
     type: "actions",
     block_id: "queue_actions_block",
-    elements: [
-      {
-        type: "button",
-        action_id: "queue_join_click",
-        text: { type: "plain_text", text: "🙋 Join Queue", emoji: true },
-        style: "primary",
-        value: params.queueId,
-      },
-      {
-        type: "button",
-        action_id: "queue_done_click",
-        text: { type: "plain_text", text: "✅ Done / Release", emoji: true },
-        value: params.queueId,
-      },
-      {
-        type: "button",
-        action_id: "queue_extend_click",
-        text: { type: "plain_text", text: "⏱️ +15m", emoji: true },
-        value: params.queueId,
-      },
-      {
-        type: "button",
-        action_id: "queue_attach_secret_click",
-        text: {
-          type: "plain_text",
-          text: "🔐 Anexar Segredo Efêmero",
-          emoji: true,
-        },
-        value: params.queueId,
-      },
-    ],
+    elements: actionElements,
   });
 
   return { blocks };
@@ -671,10 +688,50 @@ export function buildQueuePromotionMessage(params: {
   promotedUserId: string;
   previousHolderUserId?: string | null;
   maxHoldMinutes: number;
+  allowSecret?: boolean;
 }): SlackBlockMessagePayload {
   const previousText = params.previousHolderUserId
     ? ` (auto-released or handed off from <@${params.previousHolderUserId}>)`
     : "";
+
+  const elements: Record<string, unknown>[] = [];
+
+  if (params.allowSecret) {
+    elements.push({
+      type: "button",
+      action_id: "queue_attach_secret_click",
+      text: {
+        type: "plain_text",
+        text: "🔐 Anexar Segredo Efêmero",
+        emoji: true,
+      },
+      style: "primary",
+      value: params.queueId ?? params.channelName,
+    });
+  }
+
+  elements.push(
+    {
+      type: "button",
+      action_id: "queue_done_click",
+      text: {
+        type: "plain_text",
+        text: "✅ Done / Release",
+        emoji: true,
+      },
+      value: params.queueId ?? params.channelName,
+    },
+    {
+      type: "button",
+      action_id: "queue_extend_click",
+      text: {
+        type: "plain_text",
+        text: "⏱️ +15m",
+        emoji: true,
+      },
+      value: params.queueId ?? params.channelName,
+    },
+  );
 
   return {
     response_type: "in_channel",
@@ -692,39 +749,170 @@ export function buildQueuePromotionMessage(params: {
       {
         type: "actions",
         block_id: "queue_promotion_actions",
-        elements: [
-          {
-            type: "button",
-            action_id: "queue_attach_secret_click",
+        elements,
+      },
+    ],
+  };
+}
+
+export function buildQueueConfigModal(params: {
+  queueId: string;
+  channelId: string;
+  channelName: string;
+  maxConcurrency: number;
+  maxHoldMinutes: number;
+  allowSecret: boolean;
+  adminUserIds: string[];
+}): SlackModalView {
+  return {
+    type: "modal",
+    callback_id: "queue_config_modal",
+    title: { type: "plain_text", text: "Configurar Fila", emoji: true },
+    submit: { type: "plain_text", text: "Salvar", emoji: true },
+    close: { type: "plain_text", text: "Cancelar", emoji: true },
+    private_metadata: JSON.stringify({
+      queueId: params.queueId,
+      channelId: params.channelId,
+    }),
+    blocks: [
+      {
+        type: "input",
+        block_id: "queue_name_block",
+        element: {
+          type: "plain_text_input",
+          action_id: "queue_name_input",
+          initial_value: params.channelName,
+          placeholder: {
+            type: "plain_text",
+            text: "Ex: canal-deploy",
+          },
+        },
+        label: {
+          type: "plain_text",
+          text: "Nome da Fila",
+          emoji: true,
+        },
+      },
+      {
+        type: "input",
+        block_id: "max_concurrency_block",
+        element: {
+          type: "static_select",
+          action_id: "max_concurrency_input",
+          placeholder: {
+            type: "plain_text",
+            text: "Selecione a concorrência",
+          },
+          initial_option: {
             text: {
               type: "plain_text",
-              text: "🔐 Anexar Segredo Efêmero",
-              emoji: true,
+              text: `${params.maxConcurrency} vaga${params.maxConcurrency > 1 ? "s" : ""} simultânea${params.maxConcurrency > 1 ? "s" : ""}`,
             },
-            style: "primary",
-            value: params.queueId ?? params.channelName,
+            value: String(params.maxConcurrency),
           },
-          {
-            type: "button",
-            action_id: "queue_done_click",
+          options: [
+            { text: { type: "plain_text", text: "1 vaga (Mutex exclusivo)" }, value: "1" },
+            { text: { type: "plain_text", text: "2 vagas simultâneas" }, value: "2" },
+            { text: { type: "plain_text", text: "3 vagas simultâneas" }, value: "3" },
+            { text: { type: "plain_text", text: "4 vagas simultâneas" }, value: "4" },
+            { text: { type: "plain_text", text: "5 vagas simultâneas" }, value: "5" },
+          ],
+        },
+        label: {
+          type: "plain_text",
+          text: "Vagas Simultâneas (Concorrência)",
+          emoji: true,
+        },
+      },
+      {
+        type: "input",
+        block_id: "max_hold_minutes_block",
+        element: {
+          type: "static_select",
+          action_id: "max_hold_minutes_input",
+          placeholder: {
+            type: "plain_text",
+            text: "Selecione o tempo máximo",
+          },
+          initial_option: {
             text: {
               type: "plain_text",
-              text: "✅ Done / Release",
-              emoji: true,
+              text: `${params.maxHoldMinutes} minutos`,
             },
-            value: params.queueId ?? params.channelName,
+            value: String(params.maxHoldMinutes),
           },
-          {
-            type: "button",
-            action_id: "queue_extend_click",
-            text: {
-              type: "plain_text",
-              text: "⏱️ +15m",
-              emoji: true,
+          options: [
+            { text: { type: "plain_text", text: "15 minutos" }, value: "15" },
+            { text: { type: "plain_text", text: "30 minutos" }, value: "30" },
+            { text: { type: "plain_text", text: "45 minutos" }, value: "45" },
+            { text: { type: "plain_text", text: "60 minutos (1 hora)" }, value: "60" },
+            { text: { type: "plain_text", text: "120 minutos (2 horas)" }, value: "120" },
+          ],
+        },
+        label: {
+          type: "plain_text",
+          text: "Tempo Máximo de Posse",
+          emoji: true,
+        },
+      },
+      {
+        type: "input",
+        block_id: "allow_secret_block",
+        optional: true,
+        element: {
+          type: "checkboxes",
+          action_id: "allow_secret_input",
+          options: [
+            {
+              text: {
+                type: "plain_text",
+                text: "Habilitar botão de Segredo Efêmero no card da fila",
+                emoji: true,
+              },
+              value: "allow_secret",
             },
-            value: params.queueId ?? params.channelName,
+          ],
+          ...(params.allowSecret
+            ? {
+                initial_options: [
+                  {
+                    text: {
+                      type: "plain_text",
+                      text: "Habilitar botão de Segredo Efêmero no card da fila",
+                      emoji: true,
+                    },
+                    value: "allow_secret",
+                  },
+                ],
+              }
+            : {}),
+        },
+        label: {
+          type: "plain_text",
+          text: "Segredo Efêmero (Secret App)",
+          emoji: true,
+        },
+      },
+      {
+        type: "input",
+        block_id: "admin_users_block",
+        optional: true,
+        element: {
+          type: "multi_users_select",
+          action_id: "admin_users_input",
+          placeholder: {
+            type: "plain_text",
+            text: "Selecione administradores da fila",
           },
-        ],
+          ...(params.adminUserIds.length > 0
+            ? { initial_users: params.adminUserIds }
+            : {}),
+        },
+        label: {
+          type: "plain_text",
+          text: "Administradores da Fila",
+          emoji: true,
+        },
       },
     ],
   };

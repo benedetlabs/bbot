@@ -1,0 +1,73 @@
+# ==============================================================================
+# AMBIENTE LOCAL: SIGNOZ STANDALONE DOCKER-COMPOSE
+# Uso: docker compose -f docker-compose.yml -f docker-compose.signoz.yml up -d
+# ==============================================================================
+name: slack-suite-local
+
+services:
+  # --------------------------------------------------------------------------
+  # 1. CLICKHOUSE (Armazenamento OLAP para SigNoz)
+  # --------------------------------------------------------------------------
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.1.2-alpine
+    container_name: suite-clickhouse
+    restart: unless-stopped
+    environment:
+      - CLICKHOUSE_DB=signoz_metadata
+    ports:
+      - "9000:9000"
+      - "8123:8123"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+
+  # --------------------------------------------------------------------------
+  # 2. SIGNOZ QUERY SERVICE & BACKEND
+  # --------------------------------------------------------------------------
+  signoz-query-service:
+    image: signoz/query-service:v0.145.0
+    container_name: suite-signoz-query-service
+    restart: unless-stopped
+    depends_on:
+      - clickhouse
+    environment:
+      - ClickHouseUrl=tcp://clickhouse:9000
+      - STORAGE=clickhouse
+      - GODEBUG=netdns=go
+      - TELEMETRY_ENABLED=false
+    volumes:
+      - signoz_data:/var/lib/signoz
+
+  # --------------------------------------------------------------------------
+  # 3. SIGNOZ FRONTEND UI
+  # --------------------------------------------------------------------------
+  signoz-frontend:
+    image: signoz/frontend:v0.145.0
+    container_name: suite-signoz-frontend
+    restart: unless-stopped
+    depends_on:
+      - signoz-query-service
+    ports:
+      - "3301:3301"
+
+  # --------------------------------------------------------------------------
+  # 4. SIGNOZ OTEL COLLECTOR
+  # --------------------------------------------------------------------------
+  signoz-otel-collector:
+    image: signoz/signoz-otel-collector:v0.145.0
+    container_name: suite-signoz-otel-collector
+    restart: unless-stopped
+    depends_on:
+      - clickhouse
+    environment:
+      - OTEL_RESOURCE_ATTRIBUTES=host.name=local-dev
+    ports:
+      - "4317:4317" # OTLP gRPC
+      - "4318:4318" # OTLP HTTP
+
+volumes:
+  clickhouse_data:
+  signoz_data:

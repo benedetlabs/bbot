@@ -196,20 +196,41 @@ Deno.test("slack-kit: queue and todo card builders", () => {
   });
   assertEquals(queueCard.blocks.length, 4);
 
-  // Check cross-sell button in queue card
+  // Check action buttons in queue card (by default allowSecret is false -> no secret button)
   const queueActions = queueCard.blocks[3] as {
     type: string;
     elements: { action_id: string }[];
   };
-  assertEquals(queueActions.elements.length, 4);
+  assertEquals(queueActions.elements.length, 4); // join, done, extend, config
   assertEquals(
     queueActions.elements.some((e) =>
+      e.action_id === "queue_attach_secret_click"
+    ),
+    false,
+  );
+
+  // When allowSecret is true -> secret button appears
+  const queueCardWithSecret = buildQueueCard({
+    channelName: "deploy-prod",
+    queueId: "q-123",
+    activeHolders: [],
+    waitingLine: [],
+    maxConcurrency: 1,
+    allowSecret: true,
+  });
+  const queueActionsWithSecret = queueCardWithSecret.blocks[2] as {
+    type: string;
+    elements: { action_id: string }[];
+  };
+  assertEquals(queueActionsWithSecret.elements.length, 5);
+  assertEquals(
+    queueActionsWithSecret.elements.some((e) =>
       e.action_id === "queue_attach_secret_click"
     ),
     true,
   );
 
-  // Promotion message test (handoff card with cross-sell hook)
+  // Promotion message test (default allowSecret false -> no secret button)
   const promoMsg = buildQueuePromotionMessage({
     channelName: "deploy-prod",
     promotedUserId: "U20",
@@ -224,6 +245,24 @@ Deno.test("slack-kit: queue and todo card builders", () => {
   };
   assertEquals(
     promoActions.elements.some((e) =>
+      e.action_id === "queue_attach_secret_click"
+    ),
+    false,
+  );
+
+  // Promotion message with allowSecret true
+  const promoMsgWithSecret = buildQueuePromotionMessage({
+    channelName: "deploy-prod",
+    promotedUserId: "U20",
+    maxHoldMinutes: 45,
+    allowSecret: true,
+  });
+  const promoActionsWithSecret = promoMsgWithSecret.blocks[1] as {
+    type: string;
+    elements: { action_id: string }[];
+  };
+  assertEquals(
+    promoActionsWithSecret.elements.some((e) =>
       e.action_id === "queue_attach_secret_click"
     ),
     true,

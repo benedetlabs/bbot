@@ -10,15 +10,6 @@ resource "random_id" "master_encryption_key" {
   byte_length = 32 # 64 caracteres hexadecimais (AES-256-GCM)
 }
 
-resource "random_password" "openobserve_password" {
-  length           = 20
-  special          = true
-  override_special = "!@#%^&*-_"
-  min_lower        = 2
-  min_upper        = 2
-  min_numeric      = 2
-  min_special      = 2
-}
 
 resource "kubernetes_secret" "ghcr_secret" {
   metadata {

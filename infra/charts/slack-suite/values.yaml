@@ -138,23 +138,5 @@ cloudflared:
 # ============================================================================
 # POOL 4: OBSERVABILIDADE COMPLETA (obs-pool: g4s.kube.medium)
 # ============================================================================
-openobserve:
-  enabled: true
-  image: "public.ecr.aws/zinclabs/openobserve:latest"
-  nodeSelector:
-    kubernetes.civo.com/civo-node-pool: "obs-pool"
-  storageClassName: "civo-volume-retain"
-  storageSize: "30Gi"
-  resources:
-    requests:
-      cpu: "500m"
-      memory: "1Gi"
-    limits:
-      cpu: "1700m"
-      memory: "2Gi"
-  otelCollector:
-    enabled: true
-    image: "otel/opentelemetry-collector-contrib:latest"
-
 networkPolicy:
   enabled: true

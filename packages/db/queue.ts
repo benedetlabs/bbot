@@ -16,6 +16,8 @@ export interface QueueRow {
   max_concurrency: number;
   max_hold_minutes: number;
   sticky_message_ts: string | null;
+  admin_user_ids: string[];
+  allow_secret: boolean;
   created_at: Date;
 }
 
@@ -91,22 +93,41 @@ export const queuesRepo = {
       name?: string;
       maxConcurrency?: number;
       maxHoldMinutes?: number;
+      creatorSlackUserId?: string;
+      allowSecret?: boolean;
     },
     sql: Sql = getSqlWrite(),
   ): Promise<QueueRow> {
     const name = params.name ?? "default";
     const maxConcurrency = params.maxConcurrency ?? 1;
     const maxHoldMinutes = params.maxHoldMinutes ?? 45;
+    const initialAdmins = params.creatorSlackUserId
+      ? [params.creatorSlackUserId]
+      : [];
+    const allowSecret = params.allowSecret ?? false;
+
+    // Check if queue already exists for this channel to guarantee single queue per channel
+    const existing = await sql<QueueRow[]>`
+      SELECT * FROM queues
+      WHERE workspace_id = ${params.workspaceId}::uuid
+        AND slack_channel_id = ${params.channelId}
+      LIMIT 1
+    `;
+    if (existing.length > 0) {
+      return existing[0];
+    }
 
     const rows = await sql<QueueRow[]>`
       INSERT INTO queues (
-        workspace_id, slack_channel_id, name, max_concurrency, max_hold_minutes
+        workspace_id, slack_channel_id, name, max_concurrency, max_hold_minutes, admin_user_ids, allow_secret
       ) VALUES (
         ${params.workspaceId}::uuid,
         ${params.channelId},
         ${name},
         ${maxConcurrency},
-        ${maxHoldMinutes}
+        ${maxHoldMinutes},
+        ${initialAdmins},
+        ${allowSecret}
       )
       ON CONFLICT (workspace_id, slack_channel_id, name) DO UPDATE
       SET name = queues.name
@@ -139,17 +160,71 @@ export const queuesRepo = {
   async getQueueByChannel(
     workspaceId: string,
     channelId: string,
-    name = "default",
+    name?: string,
     sql: Sql = getSqlRead(),
   ): Promise<QueueRow | null> {
+    if (name) {
+      const rows = await sql<QueueRow[]>`
+        SELECT * FROM queues
+        WHERE workspace_id = ${workspaceId}::uuid
+          AND slack_channel_id = ${channelId}
+          AND name = ${name}
+        LIMIT 1
+      `;
+      if (rows.length > 0) return rows[0];
+    }
+
     const rows = await sql<QueueRow[]>`
       SELECT * FROM queues
       WHERE workspace_id = ${workspaceId}::uuid
         AND slack_channel_id = ${channelId}
-        AND name = ${name}
       LIMIT 1
     `;
     return rows[0] ?? null;
+  },
+
+  async updateQueueConfig(
+    params: {
+      queueId: string;
+      name?: string;
+      maxConcurrency?: number;
+      maxHoldMinutes?: number;
+      allowSecret?: boolean;
+      adminUserIds?: string[];
+    },
+    sql: Sql = getSqlWrite(),
+  ): Promise<QueueRow> {
+    const current = await queuesRepo.getQueueById(params.queueId, sql);
+    if (!current) {
+      throw new Error(`Queue not found: ${params.queueId}`);
+    }
+
+    const name = params.name ?? current.name;
+    const maxConcurrency = params.maxConcurrency ?? current.max_concurrency;
+    const maxHoldMinutes = params.maxHoldMinutes ?? current.max_hold_minutes;
+    const allowSecret = params.allowSecret !== undefined
+      ? params.allowSecret
+      : current.allow_secret;
+    const adminUserIds = params.adminUserIds ?? current.admin_user_ids ?? [];
+
+    const rows = await sql<QueueRow[]>`
+      UPDATE queues
+      SET name = ${name},
+          max_concurrency = ${maxConcurrency},
+          max_hold_minutes = ${maxHoldMinutes},
+          allow_secret = ${allowSecret},
+          admin_user_ids = ${adminUserIds}
+      WHERE id = ${params.queueId}::uuid
+      RETURNING *
+    `;
+    return rows[0];
+  },
+
+  isUserAdmin(queue: QueueRow, userId: string): boolean {
+    if (!queue.admin_user_ids || queue.admin_user_ids.length === 0) {
+      return true; // No restriction if admins list is empty
+    }
+    return queue.admin_user_ids.includes(userId);
   },
 
   async updateStickyMessageTs(
@@ -466,6 +541,7 @@ export const queuesRepo = {
               previousHolderUserId: params.slackUserId,
               entryId: promoted.id,
               maxHoldMinutes: queue.max_hold_minutes,
+              allowSecret: queue.allow_secret,
             },
           });
 
@@ -759,6 +835,7 @@ export const queuesRepo = {
               previousHolderUserId: target.slack_user_id,
               entryId: promoted.id,
               maxHoldMinutes: queue.max_hold_minutes,
+              allowSecret: queue.allow_secret,
             },
           });
 

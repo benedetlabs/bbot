@@ -132,6 +132,8 @@ Deno.test("queue-app: /queue status returns live queue card and triggers MAU", a
     max_concurrency: 1,
     max_hold_minutes: 45,
     sticky_message_ts: null,
+    admin_user_ids: [],
+    allow_secret: false,
     created_at: new Date(),
   };
 
@@ -188,6 +190,8 @@ Deno.test("queue-app: /queue join acquired vs waiting vs duplicate", async () =>
     max_concurrency: 1,
     max_hold_minutes: 45,
     sticky_message_ts: "1700000000.000100",
+    admin_user_ids: [],
+    allow_secret: false,
     created_at: new Date(),
   };
 
@@ -324,6 +328,8 @@ Deno.test("queue-app: /queue done releases lock and promotes next waiter", async
     max_concurrency: 1,
     max_hold_minutes: 45,
     sticky_message_ts: "1700000000.000100",
+    admin_user_ids: [],
+    allow_secret: false,
     created_at: new Date(),
   };
 
@@ -403,6 +409,8 @@ Deno.test("queue-app: /queue extend extends hold time", async () => {
     max_concurrency: 1,
     max_hold_minutes: 45,
     sticky_message_ts: "1700000000.000100",
+    admin_user_ids: [],
+    allow_secret: false,
     created_at: new Date(),
   };
 
@@ -461,6 +469,8 @@ Deno.test("queue-app: /queue kick target user", async () => {
     max_concurrency: 1,
     max_hold_minutes: 45,
     sticky_message_ts: "1700000000.000100",
+    admin_user_ids: ["U_ADMIN"],
+    allow_secret: false,
     created_at: new Date(),
   };
 
@@ -520,12 +530,28 @@ Deno.test("queue-app: /queue kick target user", async () => {
 Deno.test("queue-app: interactions block action queue_attach_secret_click opens modal", async () => {
   let viewOpenCalled = false;
   const origOpenView = slackApi.openView;
+  const origGetQueueById = queuesRepo.getQueueById;
   slackApi.openView = (_token, triggerId, view) => {
     viewOpenCalled = true;
     assertEquals(triggerId, "trig-999");
     assertEquals(view.callback_id, "secret_create_modal");
     return Promise.resolve({ ok: true });
   };
+
+  queuesRepo.getQueueById = ((id) => {
+    return Promise.resolve({
+      id,
+      workspace_id: "ws-1",
+      slack_channel_id: "C100",
+      name: "staging",
+      max_concurrency: 1,
+      max_hold_minutes: 45,
+      sticky_message_ts: "1700000000.999",
+      admin_user_ids: [],
+      allow_secret: true,
+      created_at: new Date(),
+    });
+  }) as typeof queuesRepo.getQueueById;
 
   const origEnv = Deno.env.get("QUEUE_APP_BOT_TOKEN");
   Deno.env.set("QUEUE_APP_BOT_TOKEN", "xoxb-queue-token");
@@ -580,6 +606,7 @@ Deno.test("queue-app: interactions block action queue_attach_secret_click opens 
     assertEquals(viewOpenCalled, true);
   } finally {
     slackApi.openView = origOpenView;
+    queuesRepo.getQueueById = origGetQueueById;
     workspacesRepo.findBySlackTeamId = origFindWs;
     if (origEnv !== undefined) Deno.env.set("QUEUE_APP_BOT_TOKEN", origEnv);
     else Deno.env.delete("QUEUE_APP_BOT_TOKEN");
@@ -626,6 +653,8 @@ Deno.test("queue-app: in-place chat.update vs chat.postMessage sticky card sync"
       max_concurrency: 1,
       max_hold_minutes: 45,
       sticky_message_ts: "1700000000.999",
+      admin_user_ids: [],
+      allow_secret: false,
       created_at: new Date(),
     });
   }) as typeof queuesRepo.getQueueById;
@@ -678,6 +707,8 @@ Deno.test("queue-app: in-place chat.update vs chat.postMessage sticky card sync"
           max_concurrency: 1,
           max_hold_minutes: 45,
           sticky_message_ts: "1700000000.999",
+          admin_user_ids: [],
+          allow_secret: false,
           created_at: new Date(),
         },
         activeHolders: [],
@@ -720,6 +751,8 @@ Deno.test("queue-app: in-place chat.update vs chat.postMessage sticky card sync"
           max_concurrency: 1,
           max_hold_minutes: 45,
           sticky_message_ts: null,
+          admin_user_ids: [],
+          allow_secret: false,
           created_at: new Date(),
         },
         activeHolders: [],
@@ -800,6 +833,8 @@ Deno.test("queue-app: interactions block action resolves queue by UUID", async (
         max_concurrency: 1,
         max_hold_minutes: 45,
         sticky_message_ts: "1700000000.999",
+        admin_user_ids: [],
+        allow_secret: false,
         created_at: new Date(),
       });
     }
@@ -816,6 +851,8 @@ Deno.test("queue-app: interactions block action resolves queue by UUID", async (
         max_concurrency: 1,
         max_hold_minutes: 45,
         sticky_message_ts: "1700000000.999",
+        admin_user_ids: [],
+        allow_secret: false,
         created_at: new Date(),
       },
       activeHolders: [],
@@ -870,5 +907,292 @@ Deno.test("queue-app: interactions block action resolves queue by UUID", async (
     queuesRepo.getQueueById = origGetQueueById;
     queuesRepo.getQueueState = origGetQueueState;
     workspacesRepo.findBySlackTeamId = origFindWorkspace;
+  }
+});
+
+Deno.test("queue-app: non-admin is forbidden from running /queue kick", async () => {
+  const origFindQueue = queuesRepo.findOrCreateQueue;
+  const mockQueue: QueueRow = {
+    id: "queue-1",
+    workspace_id: "ws-1",
+    slack_channel_id: "C888",
+    name: "staging",
+    max_concurrency: 1,
+    max_hold_minutes: 45,
+    sticky_message_ts: "1700000000.000100",
+    admin_user_ids: ["U_ADMIN_ONLY"],
+    allow_secret: false,
+    created_at: new Date(),
+  };
+
+  queuesRepo.findOrCreateQueue = (() => Promise.resolve(mockQueue)) as typeof queuesRepo.findOrCreateQueue;
+
+  try {
+    const body =
+      "command=%2Fqueue&text=kick%20%3C%40U_VICTIM%3E&channel_id=C888&user_id=U_REGULAR_USER&team_id=T1";
+    const headers = await createSignedHeaders(body);
+
+    const req = new Request("http://localhost:8080/slack/commands", {
+      method: "POST",
+      headers,
+      body,
+    });
+
+    const res = await app.fetch(req);
+    const json = await res.json();
+    assertEquals(json.response_type, "ephemeral");
+    assertEquals(json.text.includes("Apenas administradores da fila têm permissão"), true);
+  } finally {
+    queuesRepo.findOrCreateQueue = origFindQueue;
+  }
+});
+
+Deno.test("queue-app: non-admin is forbidden from running /queue config", async () => {
+  const origFindQueue = queuesRepo.findOrCreateQueue;
+  const mockQueue: QueueRow = {
+    id: "queue-1",
+    workspace_id: "ws-1",
+    slack_channel_id: "C888",
+    name: "staging",
+    max_concurrency: 1,
+    max_hold_minutes: 45,
+    sticky_message_ts: "1700000000.000100",
+    admin_user_ids: ["U_ADMIN_ONLY"],
+    allow_secret: false,
+    created_at: new Date(),
+  };
+
+  queuesRepo.findOrCreateQueue = (() => Promise.resolve(mockQueue)) as typeof queuesRepo.findOrCreateQueue;
+
+  try {
+    const body =
+      "command=%2Fqueue&text=config&channel_id=C888&user_id=U_REGULAR_USER&team_id=T1";
+    const headers = await createSignedHeaders(body);
+
+    const req = new Request("http://localhost:8080/slack/commands", {
+      method: "POST",
+      headers,
+      body,
+    });
+
+    const res = await app.fetch(req);
+    const json = await res.json();
+    assertEquals(json.response_type, "ephemeral");
+    assertEquals(json.text.includes("Apenas administradores da fila têm permissão"), true);
+  } finally {
+    queuesRepo.findOrCreateQueue = origFindQueue;
+  }
+});
+
+Deno.test("queue-app: admin can open config modal via /queue config", async () => {
+  let openViewCalled = false;
+  const origFindQueue = queuesRepo.findOrCreateQueue;
+  const origOpenView = slackApi.openView;
+
+  const mockQueue: QueueRow = {
+    id: "queue-1",
+    workspace_id: "ws-1",
+    slack_channel_id: "C888",
+    name: "staging",
+    max_concurrency: 1,
+    max_hold_minutes: 45,
+    sticky_message_ts: "1700000000.000100",
+    admin_user_ids: ["U_ADMIN"],
+    allow_secret: false,
+    created_at: new Date(),
+  };
+
+  queuesRepo.findOrCreateQueue = (() => Promise.resolve(mockQueue)) as typeof queuesRepo.findOrCreateQueue;
+  slackApi.openView = (_token, triggerId, view) => {
+    openViewCalled = true;
+    assertEquals(triggerId, "trig-config");
+    assertEquals(view.callback_id, "queue_config_modal");
+    return Promise.resolve({ ok: true });
+  };
+
+  const origEnv = Deno.env.get("QUEUE_APP_BOT_TOKEN");
+  Deno.env.set("QUEUE_APP_BOT_TOKEN", "xoxb-queue-token");
+
+  try {
+    const body =
+      "command=%2Fqueue&text=config&channel_id=C888&user_id=U_ADMIN&team_id=T1&trigger_id=trig-config";
+    const headers = await createSignedHeaders(body);
+
+    const req = new Request("http://localhost:8080/slack/commands", {
+      method: "POST",
+      headers,
+      body,
+    });
+
+    const res = await app.fetch(req);
+    const json = await res.json();
+    assertEquals(json.response_type, "ephemeral");
+    assertEquals(openViewCalled, true);
+  } finally {
+    queuesRepo.findOrCreateQueue = origFindQueue;
+    slackApi.openView = origOpenView;
+    if (origEnv !== undefined) Deno.env.set("QUEUE_APP_BOT_TOKEN", origEnv);
+    else Deno.env.delete("QUEUE_APP_BOT_TOKEN");
+  }
+});
+
+Deno.test("queue-app: queue_config_modal submission updates queue configuration", async () => {
+  let updatedConfig: Record<string, unknown> | null = null;
+  const origUpdateConfig = queuesRepo.updateQueueConfig;
+  const origGetQueueState = queuesRepo.getQueueState;
+  const origUpdateMsg = slackApi.updateMessage;
+
+  queuesRepo.updateQueueConfig = (params) => {
+    updatedConfig = params as unknown as Record<string, unknown>;
+    return Promise.resolve({
+      id: params.queueId,
+      workspace_id: "ws-1",
+      slack_channel_id: "C888",
+      name: params.name ?? "staging",
+      max_concurrency: params.maxConcurrency ?? 2,
+      max_hold_minutes: params.maxHoldMinutes ?? 60,
+      sticky_message_ts: "1700000000.999",
+      admin_user_ids: params.adminUserIds ?? ["U_ADMIN"],
+      allow_secret: params.allowSecret ?? true,
+      created_at: new Date(),
+    });
+  };
+
+  queuesRepo.getQueueState = (() => {
+    return Promise.resolve({
+      queue: {
+        id: "queue-1",
+        workspace_id: "ws-1",
+        slack_channel_id: "C888",
+        name: "staging-renamed",
+        max_concurrency: 2,
+        max_hold_minutes: 60,
+        sticky_message_ts: "1700000000.999",
+        admin_user_ids: ["U_ADMIN", "U_LEO"],
+        allow_secret: true,
+        created_at: new Date(),
+      },
+      activeHolders: [],
+      waitingLine: [],
+    });
+  }) as typeof queuesRepo.getQueueState;
+
+  slackApi.updateMessage = () => Promise.resolve({ ok: true });
+
+  const origEnv = Deno.env.get("QUEUE_APP_BOT_TOKEN");
+  Deno.env.set("QUEUE_APP_BOT_TOKEN", "xoxb-queue-token");
+
+  try {
+    const payload = {
+      type: "view_submission",
+      team: { id: "T1" },
+      user: { id: "U_ADMIN" },
+      view: {
+        callback_id: "queue_config_modal",
+        private_metadata: JSON.stringify({ queueId: "queue-1", channelId: "C888" }),
+        state: {
+          values: {
+            queue_name_block: { queue_name_input: { value: "staging-renamed" } },
+            max_concurrency_block: {
+              max_concurrency_input: { selected_option: { value: "3" } },
+            },
+            max_hold_minutes_block: {
+              max_hold_minutes_input: { selected_option: { value: "60" } },
+            },
+            allow_secret_block: {
+              allow_secret_input: { selected_options: [{ value: "allow_secret" }] },
+            },
+            admin_users_block: {
+              admin_users_input: { selected_users: ["U_ADMIN", "U_LEO"] },
+            },
+          },
+        },
+      },
+    };
+
+    const body = `payload=${encodeURIComponent(JSON.stringify(payload))}`;
+    const headers = await createSignedHeaders(body);
+
+    const req = new Request("http://localhost:8080/slack/interactions", {
+      method: "POST",
+      headers,
+      body,
+    });
+
+    const res = await app.fetch(req);
+    assertEquals(res.status, 200);
+    const json = await res.json();
+    assertEquals(json.response_action, "clear");
+
+    const cfg = updatedConfig as unknown as Record<string, unknown>;
+    assertEquals(cfg?.name, "staging-renamed");
+    assertEquals(cfg?.maxConcurrency, 3);
+    assertEquals(cfg?.maxHoldMinutes, 60);
+    assertEquals(cfg?.allowSecret, true);
+  } finally {
+    queuesRepo.updateQueueConfig = origUpdateConfig;
+    queuesRepo.getQueueState = origGetQueueState;
+    slackApi.updateMessage = origUpdateMsg;
+    if (origEnv !== undefined) Deno.env.set("QUEUE_APP_BOT_TOKEN", origEnv);
+    else Deno.env.delete("QUEUE_APP_BOT_TOKEN");
+  }
+});
+
+Deno.test("queue-app: queue_attach_secret_click blocked when allow_secret is false", async () => {
+  let ephemeralPosted = false;
+  const origGetQueueById = queuesRepo.getQueueById;
+  const origPostEphemeral = slackApi.postEphemeral;
+
+  queuesRepo.getQueueById = (() => {
+    return Promise.resolve({
+      id: "queue-1",
+      workspace_id: "ws-1",
+      slack_channel_id: "C100",
+      name: "staging",
+      max_concurrency: 1,
+      max_hold_minutes: 45,
+      sticky_message_ts: "1700000000.999",
+      admin_user_ids: [],
+      allow_secret: false, // Disallowed
+      created_at: new Date(),
+    });
+  }) as typeof queuesRepo.getQueueById;
+
+  slackApi.postEphemeral = (_token, _channel, _user, msg) => {
+    ephemeralPosted = true;
+    assertEquals(msg.text?.includes("desabilitado"), true);
+    return Promise.resolve({ ok: true });
+  };
+
+  const origEnv = Deno.env.get("QUEUE_APP_BOT_TOKEN");
+  Deno.env.set("QUEUE_APP_BOT_TOKEN", "xoxb-queue-token");
+
+  try {
+    const payload = {
+      type: "block_actions",
+      trigger_id: "trig-secret",
+      team: { id: "T1" },
+      user: { id: "U1" },
+      channel: { id: "C100" },
+      actions: [{ action_id: "queue_attach_secret_click", value: "queue-1" }],
+    };
+
+    const body = `payload=${encodeURIComponent(JSON.stringify(payload))}`;
+    const headers = await createSignedHeaders(body);
+
+    const req = new Request("http://localhost:8080/slack/interactions", {
+      method: "POST",
+      headers,
+      body,
+    });
+
+    const res = await app.fetch(req);
+    assertEquals(res.status, 200);
+    assertEquals(ephemeralPosted, true);
+  } finally {
+    queuesRepo.getQueueById = origGetQueueById;
+    slackApi.postEphemeral = origPostEphemeral;
+    if (origEnv !== undefined) Deno.env.set("QUEUE_APP_BOT_TOKEN", origEnv);
+    else Deno.env.delete("QUEUE_APP_BOT_TOKEN");
   }
 });

@@ -17,9 +17,9 @@ locals {
       hostname = "todo.${var.domain_name}"
       service  = "http://todo-app-svc.${local.namespace}.svc.cluster.local:80"
     }
-    observe = {
-      hostname = "observe.${var.domain_name}"
-      service  = "http://openobserve-svc.${local.namespace}.svc.cluster.local:5080"
+    signoz = {
+      hostname = "signoz.${var.domain_name}"
+      service  = "http://signoz.${local.namespace}.svc.cluster.local:8080"
     }
   }
 }

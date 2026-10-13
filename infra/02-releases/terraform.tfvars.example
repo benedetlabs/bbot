@@ -2,7 +2,6 @@
 github_username         = "benedetlabs"
 github_token            = "ghp_SEU_GITHUB_TOKEN_WRITE_E_READ_PACKAGES"
 auto_build_images       = true
-openobserve_admin_email = "benedetlabs@gmail.com"
 
 # Você pode ativar apenas 1 projeto (enabled = true) ou todos, e cada um tem sua própria image_tag!
 projects = {

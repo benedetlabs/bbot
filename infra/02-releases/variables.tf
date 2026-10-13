@@ -19,12 +19,6 @@ variable "auto_build_images" {
   default     = true
 }
 
-variable "openobserve_admin_email" {
-  description = "E-mail de administrador do painel OpenObserve"
-  type        = string
-  default     = "benedetlabs@gmail.com"
-}
-
 # ============================================================================
 # CONFIGURAÇÃO INDIVIDUAL POR PROJETO (secret-app, queue-app, todo-app)
 # Permite fazer deploy de apenas 1 projeto (enabled = true/false) e versionar tags separadas!

@@ -5,6 +5,7 @@
 
 -- Polyfill uuidv7() if running on PostgreSQL < 18 or if extension not loaded
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
 
 DO $$
 BEGIN
@@ -152,6 +153,8 @@ CREATE TABLE IF NOT EXISTS queues (
     max_concurrency INT NOT NULL DEFAULT 1,
     max_hold_minutes INT NOT NULL DEFAULT 45,
     sticky_message_ts VARCHAR(32),
+    admin_user_ids TEXT[] NOT NULL DEFAULT '{}',
+    allow_secret BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(workspace_id, slack_channel_id, name)
 );

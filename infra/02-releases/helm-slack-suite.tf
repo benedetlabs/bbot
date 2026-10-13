@@ -32,10 +32,8 @@ resource "helm_release" "slack_suite" {
         replicas = var.worker.replicas
       }
       secrets = {
-        openobserveAdminEmail    = var.openobserve_admin_email
         postgresPassword         = random_password.postgres_password.result
         masterEncryptionKeyHex   = random_id.master_encryption_key.hex
-        openobserveAdminPassword = random_password.openobserve_password.result
         secretAppSigningSecret   = try(var.projects["secret-app"].signing_secret, "")
         queueAppSigningSecret    = try(var.projects["queue-app"].signing_secret, "")
         todoAppSigningSecret     = try(var.projects["todo-app"].signing_secret, "")

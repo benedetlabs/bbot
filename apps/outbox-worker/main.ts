@@ -163,6 +163,7 @@ export async function processOutboxEvent(
         newHolderUserId,
         previousHolderUserId,
         maxHoldMinutes,
+        allowSecret: payloadAllowSecret,
       } = event.payload as {
         queueId?: string;
         channelId?: string;
@@ -170,6 +171,7 @@ export async function processOutboxEvent(
         newHolderUserId?: string;
         previousHolderUserId?: string;
         maxHoldMinutes?: number;
+        allowSecret?: boolean;
       };
       console.log(
         `[${WORKER_ID}] Promoted user ${newHolderUserId} in queue ${queueId}`,
@@ -178,6 +180,16 @@ export async function processOutboxEvent(
       if (newHolderUserId) {
         const botToken = await resolveBotToken(event.workspace_id, "queue");
         if (botToken && channelId) {
+          let allowSecret = payloadAllowSecret ?? false;
+          if (payloadAllowSecret === undefined && queueId) {
+            try {
+              const qState = await queuesRepo.getQueueState(queueId);
+              allowSecret = qState.queue.allow_secret ?? false;
+            } catch {
+              // fallback
+            }
+          }
+
           const promoMsg = buildQueuePromotionMessage({
             channelName: channelName ?? "queue",
             queueId,
@@ -185,12 +197,22 @@ export async function processOutboxEvent(
             promotedUserId: newHolderUserId,
             previousHolderUserId,
             maxHoldMinutes: maxHoldMinutes ?? 45,
+            allowSecret,
           });
           const res = await slackApi.postMessage(botToken, channelId, promoMsg);
           if (!res.ok) {
             throw new Error(
               `Slack chat.postMessage failed: ${res.error ?? "unknown error"}`,
             );
+          }
+
+          // Direct DM alert to notify top-of-queue immediately
+          try {
+            await slackApi.postMessage(botToken, newHolderUserId, {
+              text: `🚀 Você assumiu o topo da fila em <#${channelId}>! Seu acesso está liberado.`,
+            });
+          } catch {
+            // Non-fatal
           }
 
           if (queueId) {

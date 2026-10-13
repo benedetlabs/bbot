@@ -74,8 +74,8 @@ variable "node_pools" {
       workload_tier = "apps"
     }
     "obs-pool" = {
-      size          = "g4s.kube.medium" # 4 vCPU, 8 GB RAM
-      node_count    = 1
+      size          = "g4s.kube.medium" # 2 vCPU, 4 GB RAM por nó (total 2 nós = 4 vCPU, 8 GB RAM)
+      node_count    = 2
       workload_tier = "observability"
     }
   }

@@ -49,7 +49,7 @@ spec:
             - name: OTEL_EXPORTER_OTLP_PROTOCOL
               value: "http/protobuf"
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: "http://otel-collector-svc.{{ .Release.Namespace }}.svc.cluster.local:4318"
+              value: "http://signoz-otel-collector.{{ .Release.Namespace }}.svc.cluster.local:4318"
             - name: OTEL_BSP_SCHEDULE_DELAY
               value: "2000"
             - name: OTEL_METRIC_EXPORT_INTERVAL

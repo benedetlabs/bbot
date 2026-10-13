@@ -30,6 +30,10 @@ resource "civo_kubernetes_node_pool" "dedicated" {
   labels = {
     "workload-tier" = each.value.workload_tier
   }
+
+  lifecycle {
+    ignore_changes = [node_count]
+  }
 }
 
 # Consulta o cluster após todos os pools estarem ativos para garantir que o kubeconfig venha preenchido

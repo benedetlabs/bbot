@@ -44,6 +44,8 @@ function createMockQueueDb() {
           max_concurrency: maxConcurrency,
           max_hold_minutes: maxHoldMinutes,
           sticky_message_ts: null,
+          admin_user_ids: [],
+          allow_secret: false,
           created_at: new Date(),
         };
         queues.push(q);

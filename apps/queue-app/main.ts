@@ -6,6 +6,7 @@
 import { Hono } from "hono";
 import {
   buildQueueCard,
+  buildQueueConfigModal,
   buildSecretModal,
   type QueueHolder,
   type QueueWaiter,
@@ -111,6 +112,7 @@ export async function syncStickyQueueCard(params: {
     activeHolders,
     waitingLine,
     maxConcurrency: state.queue.max_concurrency,
+    allowSecret: state.queue.allow_secret,
   });
 
   let ts = state.queue.sticky_message_ts;
@@ -217,11 +219,13 @@ app.post(
       return c.json({
         response_type: "ephemeral",
         text: `🚦 *Queue Commands:*\n` +
-          `• \`/queue\` or \`/queue status\` or \`/queue list\` — Show and refresh the live channel queue card.\n` +
+          `• \`/queue\` or \`/queue status\` — Show and refresh the live channel queue card.\n` +
           `• \`/queue join [note]\` — Join the queue (acquire slot or enter waiting line).\n` +
           `• \`/queue done\` or \`/queue leave\` — Release your lock and hand off to next person.\n` +
           `• \`/queue extend [minutes]\` — Extend your active hold time (default +15m).\n` +
-          `• \`/queue kick @user\` — Admin/peer override to kick someone from lock or queue.`,
+          `• \`/queue kick @user\` — *(Admin)* Remove user from lock or queue.\n` +
+          `• \`/queue config\` or \`/queue edit\` — *(Admin)* Configure slots, max hold time, secrets, and admins.\n` +
+          `• \`/queue bump\` — Move queue card to the bottom of the channel.`,
       });
     }
 
@@ -235,6 +239,11 @@ app.post(
       "leave",
       "extend",
       "kick",
+      "config",
+      "edit",
+      "create",
+      "bump",
+      "recreate",
     ];
     if (!knownCommands.includes(firstWord)) {
       return c.json({
@@ -244,14 +253,65 @@ app.post(
       });
     }
 
-    // Find or create default queue for channel
+    // Find or create default queue for channel (strictly 1 queue per channel)
     const queue = await queuesRepo.findOrCreateQueue({
       workspaceId,
       channelId,
       name: channelName,
+      creatorSlackUserId: userId,
     });
 
-    // 2. JOIN
+    // 2. CONFIG / EDIT
+    if (firstWord === "config" || firstWord === "edit") {
+      if (!queuesRepo.isUserAdmin(queue, userId)) {
+        return c.json({
+          response_type: "ephemeral",
+          text:
+            `🚫 Apenas administradores da fila têm permissão para editar as configurações.`,
+        });
+      }
+
+      const triggerId = String(formData["trigger_id"] ?? "");
+      if (triggerId && botToken) {
+        const modal = buildQueueConfigModal({
+          queueId: queue.id,
+          channelId,
+          channelName: queue.name,
+          maxConcurrency: queue.max_concurrency,
+          maxHoldMinutes: queue.max_hold_minutes,
+          allowSecret: queue.allow_secret,
+          adminUserIds: queue.admin_user_ids ?? [],
+        });
+        await slackApi.openView(botToken, triggerId, modal);
+        return c.json({
+          response_type: "ephemeral",
+          text: `⚙️ Painel de configuração da fila aberto.`,
+        });
+      }
+
+      return c.json({
+        response_type: "ephemeral",
+        text:
+          `⚙️ Use o botão *Configurar* no card da fila para abrir o modal de configuração.`,
+      });
+    }
+
+    // 3. BUMP / RECREATE (Forces sticky message to bottom of channel)
+    if (firstWord === "bump" || firstWord === "recreate") {
+      await syncStickyQueueCard({
+        queueId: queue.id,
+        channelId,
+        channelName,
+        botToken,
+        forceNewMessage: true,
+      });
+      return c.json({
+        response_type: "ephemeral",
+        text: `📌 O card da fila foi movido para o final do canal.`,
+      });
+    }
+
+    // 4. JOIN
     if (firstWord === "join") {
       const reasonNote = text.slice(4).trim() || null;
       const joinRes = await queuesRepo.joinQueue({
@@ -291,7 +351,7 @@ app.post(
       });
     }
 
-    // 3. DONE / LEAVE
+    // 5. DONE / LEAVE
     if (firstWord === "done" || firstWord === "leave") {
       const relRes = await queuesRepo.releaseLock({
         queueId: queue.id,
@@ -309,6 +369,13 @@ app.post(
 
       if (relRes.status === "released") {
         if (relRes.promotedEntry) {
+          // Direct alert to notify top-of-queue immediately
+          if (botToken) {
+            slackApi.postMessage(botToken, relRes.promotedEntry.slack_user_id, {
+              text:
+                `🚀 You're up! You now hold the active lock on <#${channelId}>.`,
+            }).catch(() => {});
+          }
           return c.json({
             response_type: "in_channel",
             text:
@@ -335,7 +402,7 @@ app.post(
       });
     }
 
-    // 4. EXTEND
+    // 6. EXTEND
     if (firstWord === "extend") {
       const args = text.slice(6).trim();
       const parsedMin = parseInt(args, 10);
@@ -369,8 +436,16 @@ app.post(
       });
     }
 
-    // 5. KICK
+    // 7. KICK (Admin restricted)
     if (firstWord === "kick") {
+      if (!queuesRepo.isUserAdmin(queue, userId)) {
+        return c.json({
+          response_type: "ephemeral",
+          text:
+            `🚫 Apenas administradores da fila têm permissão para quicar usuários.`,
+        });
+      }
+
       const targetArg = text.slice(4).trim();
       const targetUserId = extractSlackUserId(targetArg);
 
@@ -399,6 +474,16 @@ app.post(
 
       if (kickRes.status === "kicked_active") {
         if (kickRes.promotedEntry) {
+          if (botToken) {
+            slackApi.postMessage(
+              botToken,
+              kickRes.promotedEntry.slack_user_id,
+              {
+                text:
+                  `🚀 You're up! You now hold the active lock on <#${channelId}>.`,
+              },
+            ).catch(() => {});
+          }
           return c.json({
             response_type: "in_channel",
             text:
@@ -427,7 +512,7 @@ app.post(
       });
     }
 
-    // 6. DEFAULT: STATUS / LIST / BUMP
+    // 8. DEFAULT: STATUS / LIST
     const syncRes = await syncStickyQueueCard({
       queueId: queue.id,
       channelId,
@@ -435,6 +520,13 @@ app.post(
       botToken,
       forceNewMessage: !queue.sticky_message_ts,
     });
+
+    if (botToken) {
+      return c.json({
+        response_type: "ephemeral",
+        text: `📌 O card da fila está sincronizado no canal.`,
+      });
+    }
 
     return c.json({
       response_type: "in_channel",
@@ -494,39 +586,61 @@ app.post(
 
     const botToken = await resolveBotToken(teamId, "queue");
 
+    // Handle view submissions
+    if (payload.type === "view_submission") {
+      const callbackId = payload.view?.callback_id;
+      if (callbackId === "queue_config_modal") {
+        const metaStr = payload.view?.private_metadata ?? "{}";
+        let meta: { queueId?: string; channelId?: string } = {};
+        try {
+          meta = JSON.parse(metaStr);
+        } catch {
+          // ignore
+        }
+        const queueId = meta.queueId;
+        const targetChannelId = meta.channelId || channelId;
+        const values = payload.view?.state?.values ?? {};
+
+        const nameInput = values["queue_name_block"]?.["queue_name_input"]?.value;
+        const concurrencyInput =
+          values["max_concurrency_block"]?.["max_concurrency_input"]?.selected_option?.value;
+        const holdInput =
+          values["max_hold_minutes_block"]?.["max_hold_minutes_input"]?.selected_option?.value;
+        const selectedSecretOptions =
+          values["allow_secret_block"]?.["allow_secret_input"]?.selected_options ?? [];
+        const allowSecret = Array.isArray(selectedSecretOptions) &&
+          selectedSecretOptions.some((o: { value?: string }) => o.value === "allow_secret");
+        const adminUsers =
+          values["admin_users_block"]?.["admin_users_input"]?.selected_users ?? [];
+
+        if (queueId) {
+          await queuesRepo.updateQueueConfig({
+            queueId,
+            name: nameInput ? String(nameInput).trim() : undefined,
+            maxConcurrency: concurrencyInput ? parseInt(concurrencyInput, 10) : undefined,
+            maxHoldMinutes: holdInput ? parseInt(holdInput, 10) : undefined,
+            allowSecret,
+            adminUserIds: Array.isArray(adminUsers) && adminUsers.length > 0 ? adminUsers : undefined,
+          });
+
+          if (botToken && targetChannelId) {
+            await syncStickyQueueCard({
+              queueId,
+              channelId: targetChannelId,
+              botToken,
+            });
+          }
+        }
+
+        return c.json({ response_action: "clear" });
+      }
+    }
+
     // Handle block actions
     if (payload.type === "block_actions") {
       const action = payload.actions?.[0];
       const actionId = action?.action_id;
       const actionVal = String(action?.value ?? "");
-
-      // 1. Cross-sell hook: Attach Ephemeral Secret
-      if (actionId === "queue_attach_secret_click") {
-        const modalView = buildSecretModal({
-          defaultChannelId: channelId,
-          initialContext: "Handoff secret for queue",
-        });
-
-        if (triggerId) {
-          const secretToken = await resolveBotToken(teamId, "secret") ??
-            botToken;
-          if (secretToken) {
-            try {
-              await slackApi.openView(secretToken, triggerId, modalView);
-            } catch (err) {
-              console.error(
-                "Failed to open secret modal from queue cross-sell:",
-                err,
-              );
-            }
-          }
-        }
-
-        return c.json({
-          response_action: "open",
-          view: modalView,
-        });
-      }
 
       // Resolve queue: action value might be queueId, or look up by channel
       let queue: QueueRow | null = null;
@@ -557,6 +671,7 @@ app.post(
                 !/^[0-9a-f-]{36}$/i.test(actionVal))
               ? actionVal
               : undefined,
+            creatorSlackUserId: userId,
           });
         }
       }
@@ -565,7 +680,71 @@ app.post(
         return c.text("Queue not found", 404);
       }
 
-      // 2. Join click
+      // 1. Cross-sell hook: Attach Ephemeral Secret (Requires allow_secret = true)
+      if (actionId === "queue_attach_secret_click") {
+        if (!queue.allow_secret) {
+          if (botToken && channelId) {
+            await slackApi.postEphemeral(botToken, channelId, userId, {
+              text: "🔒 O anexo de segredos está desabilitado nesta fila.",
+            });
+          }
+          return c.text("OK");
+        }
+
+        const modalView = buildSecretModal({
+          defaultChannelId: channelId,
+          initialContext: "Handoff secret for queue",
+        });
+
+        if (triggerId) {
+          const secretToken = await resolveBotToken(teamId, "secret") ??
+            botToken;
+          if (secretToken) {
+            try {
+              await slackApi.openView(secretToken, triggerId, modalView);
+            } catch (err) {
+              console.error(
+                "Failed to open secret modal from queue cross-sell:",
+                err,
+              );
+            }
+          }
+        }
+
+        return c.json({
+          response_action: "open",
+          view: modalView,
+        });
+      }
+
+      // 2. Queue Config Click (Admin only)
+      if (actionId === "queue_config_click") {
+        if (!queuesRepo.isUserAdmin(queue, userId)) {
+          if (botToken && channelId) {
+            await slackApi.postEphemeral(botToken, channelId, userId, {
+              text:
+                "🚫 Apenas administradores da fila têm permissão para configurar as opções.",
+            });
+          }
+          return c.text("OK");
+        }
+
+        if (triggerId && botToken) {
+          const modalView = buildQueueConfigModal({
+            queueId: queue.id,
+            channelId: channelId || queue.slack_channel_id,
+            channelName: queue.name,
+            maxConcurrency: queue.max_concurrency,
+            maxHoldMinutes: queue.max_hold_minutes,
+            allowSecret: queue.allow_secret,
+            adminUserIds: queue.admin_user_ids ?? [],
+          });
+          await slackApi.openView(botToken, triggerId, modalView);
+        }
+        return c.text("OK");
+      }
+
+      // 3. Join click
       if (actionId === "queue_join_click") {
         await queuesRepo.joinQueue({
           queueId: queue.id,
@@ -581,13 +760,20 @@ app.post(
         return c.text("OK");
       }
 
-      // 3. Done click
+      // 4. Done click
       if (actionId === "queue_done_click") {
-        await queuesRepo.releaseLock({
+        const relRes = await queuesRepo.releaseLock({
           queueId: queue.id,
           workspaceId,
           slackUserId: userId,
         });
+
+        if (relRes.status === "released" && relRes.promotedEntry && botToken) {
+          slackApi.postMessage(botToken, relRes.promotedEntry.slack_user_id, {
+            text:
+              `🚀 Você assumiu o topo da fila em <#${channelId}>! Seu acesso está liberado.`,
+          }).catch(() => {});
+        }
 
         await syncStickyQueueCard({
           queueId: queue.id,
@@ -597,7 +783,7 @@ app.post(
         return c.text("OK");
       }
 
-      // 4. Extend click
+      // 5. Extend click
       if (actionId === "queue_extend_click") {
         await queuesRepo.extendLock({
           queueId: queue.id,
