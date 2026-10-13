@@ -142,6 +142,9 @@ spec:
   jobTemplate:
     spec:
       template:
+        metadata:
+          labels:
+            app: pg18-backup
         spec:
           {{- if .Values.postgres.nodeSelector }}
           nodeSelector:

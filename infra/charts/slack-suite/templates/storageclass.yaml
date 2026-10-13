@@ -5,10 +5,11 @@ metadata:
   name: {{ .Values.storageClass.name }}
   annotations:
     storageclass.kubernetes.io/is-default-class: "false"
+    helm.sh/resource-policy: keep
 provisioner: {{ .Values.storageClass.provisioner }}
 # CRÍTICO: Retain garante que o disco SSD de dados de planos/clientes NUNCA seja deletado
 # mesmo se alguém rodar "helm uninstall" ou apagar o StatefulSet acidentalmente!
 reclaimPolicy: Retain
-volumeBindingMode: WaitForFirstConsumer
+volumeBindingMode: Immediate
 allowVolumeExpansion: true
 {{- end }}

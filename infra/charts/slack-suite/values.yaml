@@ -36,18 +36,18 @@ postgres:
     kubernetes.civo.com/civo-node-pool: "db-pool"
   storageClassName: "civo-volume-retain"
   storageSize: "50Gi"
-  sharedBuffers: "2GB"
-  effectiveCacheSize: "6GB"
-  workMem: "16MB"
-  maintenanceWorkMem: "512MB"
+  sharedBuffers: "512MB"
+  effectiveCacheSize: "1536MB"
+  workMem: "8MB"
+  maintenanceWorkMem: "128MB"
   maxConnections: "200"
   resources:
     requests:
-      cpu: "1500m"
-      memory: "4Gi"
+      cpu: "500m"
+      memory: "1Gi"
     limits:
-      cpu: "3500m"
-      memory: "6Gi"
+      cpu: "1600m"
+      memory: "1800Mi"
   backup:
     enabled: true
     schedule: "0 */6 * * *"
@@ -55,7 +55,7 @@ postgres:
     retentionDays: 14
 
 # ============================================================================
-# POOL 2: PGCACHE DEDICADO (cache-pool: g4s.kube.small - 2 vCPU, 4 GB RAM)
+# POOL 2: PGCACHE DEDICADO (cache-pool: g4s.kube.small)
 # ============================================================================
 pgcache:
   enabled: true
@@ -66,11 +66,11 @@ pgcache:
   slotName: "pgcache_suite_slot"
   resources:
     requests:
-      cpu: "500m"
-      memory: "1Gi"
+      cpu: "250m"
+      memory: "512Mi"
     limits:
-      cpu: "1500m"
-      memory: "3Gi"
+      cpu: "800m"
+      memory: "950Mi"
 
 # ============================================================================
 # POOL 3: APLICAÇÕES DENO POR PROJETO + WORKER + TUNNEL (app-pool)
@@ -93,11 +93,11 @@ apps:
       imageTag: "v1.0.0"
       replicas: 2
     queue-app:
-      enabled: true
+      enabled: false
       imageTag: "v1.0.0"
       replicas: 2
     todo-app:
-      enabled: true
+      enabled: false
       imageTag: "v1.0.0"
       replicas: 2
 
@@ -133,7 +133,7 @@ cloudflared:
       memory: "128Mi"
 
 # ============================================================================
-# POOL 4: OBSERVABILIDADE COMPLETA (obs-pool: g4s.kube.medium - 4 vCPU, 8 GB RAM)
+# POOL 4: OBSERVABILIDADE COMPLETA (obs-pool: g4s.kube.medium)
 # ============================================================================
 openobserve:
   enabled: true
@@ -144,11 +144,11 @@ openobserve:
   storageSize: "30Gi"
   resources:
     requests:
-      cpu: "1000m"
-      memory: "2Gi"
+      cpu: "500m"
+      memory: "1Gi"
     limits:
-      cpu: "3000m"
-      memory: "5Gi"
+      cpu: "1700m"
+      memory: "2Gi"
   otelCollector:
     enabled: true
     image: "otel/opentelemetry-collector-contrib:latest"

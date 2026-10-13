@@ -27,6 +27,9 @@ spec:
         - podSelector:
             matchLabels:
               app: pgcache
+        - podSelector:
+            matchLabels:
+              app: pg18-backup
       ports:
         - protocol: TCP
           port: 5432

@@ -44,16 +44,18 @@ services:
       postgres-origin:
         condition: service_healthy
     environment:
-      PGCACHE_LISTEN_ADDR: "0.0.0.0:5433"
-      PGCACHE_ORIGIN_HOST: "postgres-origin"
-      PGCACHE_ORIGIN_PORT: "5432"
-      PGCACHE_ORIGIN_USER: "suite_user"
-      PGCACHE_ORIGIN_PASSWORD: "suite_local_password"
-      PGCACHE_ORIGIN_DB: "slack_suite"
-      PGCACHE_CDC_PUBLICATION: "pgcache_suite_pub"
-      PGCACHE_CDC_SLOT: "pgcache_suite_slot"
+      LISTEN_PORT: "5432"
+      ORIGIN_HOST: "postgres-origin"
+      ORIGIN_PORT: "5432"
+      ORIGIN_SSL_MODE: "disable"
+      ORIGIN_USER: "suite_user"
+      ORIGIN_PASSWORD: "suite_local_password"
+      ORIGIN_DATABASE: "slack_suite"
+      PUBLICATION: "pgcache_suite_pub"
+      SLOT: "pgcache_suite_slot"
+      PGCACHE_TELEMETRY: "off"
     ports:
-      - "5433:5433"
+      - "5433:5432"
 
   # --------------------------------------------------------------------------
   # 3. APPS (SECRET, QUEUE, TODO)

@@ -24,34 +24,40 @@ spec:
         - name: pgcache
           image: {{ .Values.pgcache.image | quote }}
           ports:
-            - containerPort: 5433
+            - containerPort: 5432
               name: pgcache
           env:
-            - name: PGCACHE_LISTEN_ADDR
-              value: "0.0.0.0:5433"
-            - name: PGCACHE_ORIGIN_HOST
-              value: "postgres-origin-svc"
-            - name: PGCACHE_ORIGIN_PORT
+            - name: LISTEN_PORT
               value: "5432"
-            - name: PGCACHE_ORIGIN_USER
+            - name: NUM_WORKERS
+              value: "2"
+            - name: ORIGIN_HOST
+              value: "postgres-origin-svc"
+            - name: ORIGIN_PORT
+              value: "5432"
+            - name: ORIGIN_SSL_MODE
+              value: "disable"
+            - name: ORIGIN_USER
               valueFrom:
                 secretKeyRef:
                   name: suite-secrets
                   key: POSTGRES_USER
-            - name: PGCACHE_ORIGIN_PASSWORD
+            - name: ORIGIN_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: suite-secrets
                   key: POSTGRES_PASSWORD
-            - name: PGCACHE_ORIGIN_DB
+            - name: ORIGIN_DATABASE
               valueFrom:
                 secretKeyRef:
                   name: suite-secrets
                   key: POSTGRES_DB
-            - name: PGCACHE_CDC_PUBLICATION
+            - name: PUBLICATION
               value: {{ .Values.pgcache.publicationName | quote }}
-            - name: PGCACHE_CDC_SLOT
+            - name: SLOT
               value: {{ .Values.pgcache.slotName | quote }}
+            - name: PGCACHE_TELEMETRY
+              value: "off"
           resources:
 {{ toYaml .Values.pgcache.resources | indent 12 }}
 ---
@@ -67,5 +73,5 @@ spec:
   ports:
     - name: pgcache
       port: 5433
-      targetPort: 5433
+      targetPort: 5432
 {{- end }}

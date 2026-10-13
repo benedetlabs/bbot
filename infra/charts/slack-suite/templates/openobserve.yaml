@@ -34,7 +34,7 @@ spec:
               name: grpc
           env:
             - name: ZO_DATA_DIR
-              value: "/data"
+              value: "/data/openobserve"
             - name: ZO_HTTP_PORT
               value: "5080"
             - name: ZO_GRPC_PORT
@@ -58,13 +58,13 @@ spec:
             httpGet:
               path: /healthz
               port: 5080
-            initialDelaySeconds: 5
+            initialDelaySeconds: 10
             periodSeconds: 10
           livenessProbe:
             httpGet:
               path: /healthz
               port: 5080
-            initialDelaySeconds: 15
+            initialDelaySeconds: 30
             periodSeconds: 20
           resources:
 {{ toYaml .Values.openobserve.resources | indent 12 }}
