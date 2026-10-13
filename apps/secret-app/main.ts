@@ -14,6 +14,7 @@ import {
   buildSecretActiveCard,
   buildSecretBurnedCard,
   buildSecretModal,
+  buildSecretRevealedEphemeral,
   buildSecretRevealedModal,
   slackApi,
   slackModalClear,
@@ -97,51 +98,52 @@ app.post(
       );
     }
 
-    // If trigger_id is present, open modal via Slack API
+    // If trigger_id is present, open modal via Slack API asynchronously and return 200 immediately
     if (triggerId) {
-      let botToken = Deno.env.get("SECRET_APP_BOT_TOKEN") ??
-        Deno.env.get("SLACK_BOT_TOKEN");
-      if (!botToken && teamId) {
-        try {
-          const install = await installationsRepo.findInstallation(
-            teamId,
-            "secret",
-          );
-          if (install?.installation.bot_access_token_enc) {
-            const masterKey = await importMasterKey(getMasterKeyHex());
-            botToken = await decryptOAuthToken(
-              install.installation.bot_access_token_enc,
-              masterKey,
+      const botTokenPromise = (async () => {
+        let token = Deno.env.get("SECRET_APP_BOT_TOKEN") ??
+          Deno.env.get("SLACK_BOT_TOKEN");
+        if (!token && teamId) {
+          try {
+            const install = await installationsRepo.findInstallation(
+              teamId,
+              "secret",
             );
+            if (install?.installation.bot_access_token_enc) {
+              const masterKey = await importMasterKey(getMasterKeyHex());
+              token = await decryptOAuthToken(
+                install.installation.bot_access_token_enc,
+                masterKey,
+              );
+            }
+          } catch (err) {
+            console.error("Failed to query installation for views.open:", err);
           }
-        } catch (err) {
-          console.error("Failed to query installation for views.open:", err);
         }
-      }
-      if (botToken) {
+        return token;
+      })();
+
+      // Fire modal open in background so Slack command responds well under 3000ms SLA
+      (async () => {
         try {
-          const res = await slackApi.openView(botToken, triggerId, modalView);
-          if (!res.ok) {
-            console.error("Slack views.open returned error:", res.error);
-            return c.json({
-              response_type: "ephemeral",
-              text: `⚠️ Falha ao abrir o modal no Slack: \`${res.error ?? "unknown_error"}\``,
-            });
+          const token = await botTokenPromise;
+          if (token) {
+            const res = await slackApi.openView(token, triggerId, modalView);
+            if (!res.ok) {
+              console.error("Slack views.open returned error:", res.error);
+            }
+          } else {
+            console.warn("No bot token available to open modal for /secret command");
           }
-          return c.body(null, 200);
         } catch (err) {
-          console.error("Failed to open modal via views.open:", err);
+          console.error("Failed to open modal via views.open in background:", err);
         }
-      } else {
-        return c.json({
-          response_type: "ephemeral",
-          text:
-            "⚠️ *Configuração pendente:* Falta configurar o `bot_token` (`xoxb-...`) do app Secret no `terraform.tfvars` (em *OAuth & Permissions* -> *Bot User OAuth Token* no painel do Slack).",
-        });
-      }
+      })();
+
+      return c.body(null, 200);
     }
 
-    // Return modal view for unit tests (when trigger_id is not provided)
+    // Return modal view for unit tests or clients when trigger_id is not provided
     return c.json({
       response_action: "open",
       view: modalView,
@@ -467,47 +469,78 @@ app.post(
           remainingViews: stored.remainingViews,
         });
 
-        // If trigger_id is present, call views.open via Slack Web API
-        if (payload.trigger_id) {
-          let botToken = Deno.env.get("SECRET_APP_BOT_TOKEN") ??
-            Deno.env.get("SLACK_BOT_TOKEN");
-          if (!botToken && payloadData.workspaceId) {
-            try {
-              const install = await installationsRepo.findByWorkspaceId(
-                payloadData.workspaceId,
-                "secret",
-              );
-              if (install?.installation.bot_access_token_enc) {
-                botToken = await decryptOAuthToken(
-                  install.installation.bot_access_token_enc,
-                  masterKey,
-                );
-              }
-            } catch (err) {
-              console.error(
-                "Failed to resolve bot token for reveal modal:",
-                err,
+        // Resolve Bot Token
+        let botToken = Deno.env.get("SECRET_APP_BOT_TOKEN") ??
+          Deno.env.get("SLACK_BOT_TOKEN");
+        if (!botToken && payloadData.workspaceId) {
+          try {
+            const install = await installationsRepo.findByWorkspaceId(
+              payloadData.workspaceId,
+              "secret",
+            );
+            if (install?.installation.bot_access_token_enc) {
+              botToken = await decryptOAuthToken(
+                install.installation.bot_access_token_enc,
+                masterKey,
               );
             }
-          }
-          if (botToken) {
-            try {
-              await slackApi.openView(
-                botToken,
-                payload.trigger_id,
-                revealedModal,
-              );
-              return c.body(null, 200);
-            } catch (err) {
-              console.error("Failed to call views.open on reveal:", err);
-            }
+          } catch (err) {
+            console.error("Failed to resolve bot token for reveal modal:", err);
           }
         }
 
-        return c.json({
-          response_action: "open",
-          view: revealedModal,
-        });
+        let modalOpened = false;
+        // 1. If trigger_id is present, attempt to open the modal
+        if (payload.trigger_id && botToken) {
+          try {
+            const res = await slackApi.openView(
+              botToken,
+              payload.trigger_id,
+              revealedModal,
+            );
+            if (res.ok) {
+              modalOpened = true;
+            } else {
+              console.error("Slack views.open failed on reveal:", res.error);
+            }
+          } catch (err) {
+            console.error("Failed to call views.open on reveal:", err);
+          }
+        }
+
+        // 2. Fallback: If modal could not be opened (e.g. trigger_id expired or missing),
+        // send the secret as an ephemeral message directly to the viewer in the channel so they NEVER lose the secret!
+        if (!modalOpened) {
+          const ephemeralPayload = buildSecretRevealedEphemeral({
+            plaintext,
+            creatorSlackId: payloadData.creatorSlackId,
+            destroyedAtIso,
+            remainingViews: stored.remainingViews,
+          });
+
+          if (botToken && channelId) {
+            try {
+              await slackApi.postEphemeral(
+                botToken,
+                channelId,
+                user.id,
+                ephemeralPayload,
+              );
+              return c.body(null, 200);
+            } catch (err) {
+              console.error("Failed to send ephemeral fallback on reveal:", err);
+            }
+          }
+
+          // Return fallback response
+          return c.json({
+            response_action: "open",
+            view: revealedModal,
+            ...ephemeralPayload,
+          });
+        }
+
+        return c.body(null, 200);
       }
 
       // REVOKE & DESTROY

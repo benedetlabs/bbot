@@ -456,6 +456,48 @@ export function buildSecretRevealedModal(params: {
   };
 }
 
+export function buildSecretRevealedEphemeral(params: {
+  plaintext: string;
+  creatorSlackId: string;
+  destroyedAtIso: string;
+  remainingViews?: number;
+}): SlackBlockMessagePayload {
+  const isLastView = !params.remainingViews || params.remainingViews <= 0;
+  const warningText = isLastView
+    ? "⚠️ *AVISO: Este segredo foi permanentemente destruído dos servidores.*\nCopie o valor abaixo antes de mudar de canal."
+    : `ℹ️ *Segredo Revelado.* Visualizações restantes: *${params.remainingViews}*.`;
+
+  return {
+    response_type: "ephemeral",
+    text: "🔓 Segredo Decriptado",
+    blocks: [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `🔓 *Segredo Decriptado*\n${warningText}`,
+        },
+      },
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `\`\`\`\n${params.plaintext}\n\`\`\``,
+        },
+      },
+      {
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text: `Compartilhado por: <@${params.creatorSlackId}> • Processado em: ${params.destroyedAtIso}`,
+          },
+        ],
+      },
+    ],
+  };
+}
+
 export function buildSecretBurnedCard(params: {
   contextLabel?: string;
   viewerSlackId?: string;
