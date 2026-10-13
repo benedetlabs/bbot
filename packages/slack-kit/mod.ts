@@ -513,9 +513,12 @@ export function buildSecretBurnedCard(params: {
   viewerSlackId?: string;
   burnedAtIso: string;
   wasRevoked?: boolean;
+  wasExpired?: boolean;
 }): SlackBlockMessagePayload {
   const title = params.wasRevoked
     ? "🔒 *Encrypted Secret (Revoked & Destroyed)*"
+    : params.wasExpired
+    ? "🔒 *Encrypted Secret (Expired & Purged)*"
     : "🔒 *Encrypted Secret (Permanently Destroyed)*";
 
   const contextText = params.contextLabel
@@ -524,6 +527,8 @@ export function buildSecretBurnedCard(params: {
 
   const statusText = params.wasRevoked
     ? `*🔴 Status:* Revoked and permanently purged.`
+    : params.wasExpired
+    ? `*🔴 Status:* Expired by TTL policy and permanently purged from server memory.`
     : `*🔴 Status:* Viewed by <@${
       params.viewerSlackId ?? "a teammate"
     }> on ${params.burnedAtIso}`;

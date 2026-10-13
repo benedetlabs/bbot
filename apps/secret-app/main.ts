@@ -364,12 +364,69 @@ app.post(
           },
         );
 
+        const messageTs = payload.container?.message_ts ??
+          payload.message?.ts;
+        const channelId = payload.channel?.id ??
+          payload.container?.channel_id;
+
         if (!stored) {
           // Already burned, revoked, or expired!
+          const ephemeralText =
+            "🔒 *This secret has already been burned, revoked, or has expired.*";
+
+          // If bot token and channel are available, actively post ephemeral notice so Slack user receives immediate feedback
+          let botToken = Deno.env.get("SECRET_APP_BOT_TOKEN") ??
+            Deno.env.get("SLACK_BOT_TOKEN");
+          if (!botToken && payload.team?.id) {
+            try {
+              const install = await installationsRepo.findInstallation(
+                payload.team.id,
+                "secret",
+              );
+              if (install?.installation.bot_access_token_enc) {
+                const masterKey = await importMasterKey(getMasterKeyHex());
+                botToken = await decryptOAuthToken(
+                  install.installation.bot_access_token_enc,
+                  masterKey,
+                );
+              }
+            } catch (err) {
+              console.error("Failed to query bot token for expired secret notice:", err);
+            }
+          }
+
+          if (botToken && channelId) {
+            slackApi.postEphemeral(botToken, channelId, user.id, {
+              text: ephemeralText,
+              blocks: [
+                {
+                  type: "section",
+                  text: {
+                    type: "mrkdwn",
+                    text: ephemeralText,
+                  },
+                },
+              ],
+            }).catch((err) =>
+              console.error("Failed to send ephemeral notice on expired secret:", err)
+            );
+
+            // Also update the card in the channel to Expired & Purged state (State 3) if messageTs is known
+            if (messageTs) {
+              const expiredCard = buildSecretBurnedCard({
+                burnedAtIso: new Date().toISOString(),
+                wasExpired: true,
+              });
+              slackApi.updateMessage(botToken, channelId, messageTs, expiredCard)
+                .catch((err) =>
+                  console.error("Failed to update expired card in channel:", err)
+                );
+            }
+          }
+
           return c.json({
             response_type: "ephemeral",
-            text:
-              "🔒 *This secret has already been burned, revoked, or has expired.*",
+            text: ephemeralText,
           });
         }
 
@@ -429,10 +486,8 @@ app.post(
         }
 
         // Determine messageTs and channelId from interaction container/message or payloadData
-        const messageTs = payload.container?.message_ts ??
-          payload.message?.ts ?? payloadData.messageTs;
-        const channelId = payload.channel?.id ??
-          payload.container?.channel_id ?? payloadData.channelId;
+        const resolvedMessageTs = messageTs ?? payloadData.messageTs;
+        const resolvedChannelId = channelId ?? payloadData.channelId;
 
         // If completely burned (last view), trigger card update to State 3
         if (stored.burned) {
@@ -443,15 +498,15 @@ app.post(
             wasRevoked: false,
           });
 
-          if (channelId && messageTs && payloadData.workspaceId) {
+          if (resolvedChannelId && resolvedMessageTs && payloadData.workspaceId) {
             await sqlWrite.begin(async (tx) => {
               await enqueueOutboxEvent(tx, {
                 workspaceId: payloadData.workspaceId,
                 appSource: "secret",
                 eventType: "secret.burned_card_update",
                 payload: {
-                  channelId,
-                  messageTs,
+                  channelId: resolvedChannelId,
+                  messageTs: resolvedMessageTs,
                   cardPayload: burnedCard,
                 },
               });
