@@ -293,6 +293,14 @@ export function buildSecretModal(options?: {
           },
           options: [
             {
+              text: { type: "plain_text", text: "5 minutes (High Security)" },
+              value: "300",
+            },
+            {
+              text: { type: "plain_text", text: "15 minutes" },
+              value: "900",
+            },
+            {
               text: { type: "plain_text", text: "1 hour (Recommended)" },
               value: "3600",
             },
