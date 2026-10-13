@@ -1,6 +1,8 @@
 import { assertEquals } from "@std/assert";
 import {
   buildQueueCard,
+  buildQueueConfigModal,
+  buildQueueDeleteConfirmModal,
   buildQueuePromotionMessage,
   buildQueueTimeoutWarningMessage,
   buildSecretActiveCard,
@@ -300,6 +302,41 @@ Deno.test("slack-kit: queue and todo card builders", () => {
     creatorSlackId: "U20",
   });
   assertEquals(todoCard.blocks.length, 1);
+});
+
+Deno.test("slack-kit: queue config modal and delete confirm modal", () => {
+  const configModal = buildQueueConfigModal({
+    queueId: "q-123",
+    channelId: "C100",
+    channelName: "deploy-prod",
+    maxConcurrency: 2,
+    maxHoldMinutes: 30,
+    allowSecret: false,
+    adminUserIds: ["U10"],
+  });
+  assertEquals(configModal.type, "modal");
+  assertEquals(configModal.callback_id, "queue_config_modal");
+
+  // Check Danger Zone delete button
+  const dangerSection = configModal.blocks.find(
+    (b) => b.type === "section" && (b as { accessory?: { action_id?: string } }).accessory?.action_id === "queue_delete_modal_click",
+  ) as { accessory?: { action_id?: string; style?: string } };
+  assertEquals(dangerSection !== undefined, true);
+  assertEquals(dangerSection.accessory?.action_id, "queue_delete_modal_click");
+  assertEquals(dangerSection.accessory?.style, "danger");
+
+  // Confirm delete modal
+  const confirmModal = buildQueueDeleteConfirmModal({
+    queueId: "q-123",
+    channelId: "C100",
+    channelName: "deploy-prod",
+  });
+  assertEquals(confirmModal.type, "modal");
+  assertEquals(confirmModal.callback_id, "queue_delete_confirm_modal");
+  assertEquals(confirmModal.submit?.text, "Sim, Remover Fila");
+  const meta = JSON.parse(confirmModal.private_metadata!);
+  assertEquals(meta.queueId, "q-123");
+  assertEquals(meta.channelId, "C100");
 });
 
 Deno.test("slack-kit: modal response helpers", () => {

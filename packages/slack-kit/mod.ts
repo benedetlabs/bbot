@@ -914,6 +914,57 @@ export function buildQueueConfigModal(params: {
           emoji: true,
         },
       },
+      { type: "divider" },
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: "*⚠️ Zona de Perigo*\nRemover a fila encerra o card do canal e cancela todos os slots e esperas ativas.",
+        },
+        accessory: {
+          type: "button",
+          action_id: "queue_delete_modal_click",
+          text: {
+            type: "plain_text",
+            text: "🗑️ Remover Fila",
+            emoji: true,
+          },
+          style: "danger",
+          value: params.queueId,
+        },
+      },
+    ],
+  };
+}
+
+export function buildQueueDeleteConfirmModal(params: {
+  queueId: string;
+  channelId: string;
+  channelName: string;
+}): SlackModalView {
+  return {
+    type: "modal",
+    callback_id: "queue_delete_confirm_modal",
+    title: { type: "plain_text", text: "Remover Fila", emoji: true },
+    submit: { type: "plain_text", text: "Sim, Remover Fila", emoji: true },
+    close: { type: "plain_text", text: "Cancelar", emoji: true },
+    private_metadata: JSON.stringify({
+      queueId: params.queueId,
+      channelId: params.channelId,
+      channelName: params.channelName,
+    }),
+    blocks: [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `⚠️ *Tem certeza que deseja remover a fila de #${params.channelName}?*\n\n` +
+            `• O card fixo no canal será permanentemente excluído.\n` +
+            `• Todos os usuários com posse ativa e os participantes na fila de espera serão liberados.\n` +
+            `• Qualquer tarefa de timeout agendada será cancelada imediatamente.\n\n` +
+            `_Se alguém executar \`/queue\` posteriormente, uma nova fila limpa poderá ser criada._`,
+        },
+      },
     ],
   };
 }

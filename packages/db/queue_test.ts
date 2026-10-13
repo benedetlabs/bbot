@@ -315,6 +315,25 @@ function createMockQueueDb() {
       return Promise.resolve({ count });
     }
 
+    // 10. DELETE FROM queue_entries
+    if (rawSql.includes("DELETE FROM queue_entries")) {
+      const queueId = String(values[0]);
+      for (let i = queueEntries.length - 1; i >= 0; i--) {
+        if (queueEntries[i].queue_id === queueId) {
+          queueEntries.splice(i, 1);
+        }
+      }
+      return Promise.resolve([]);
+    }
+
+    // 11. DELETE FROM queues
+    if (rawSql.includes("DELETE FROM queues")) {
+      const queueId = String(values[0]);
+      const idx = queues.findIndex((q) => q.id === queueId);
+      if (idx !== -1) queues.splice(idx, 1);
+      return Promise.resolve([]);
+    }
+
     return Promise.resolve([]);
   }) as unknown as Sql;
 
@@ -631,3 +650,51 @@ Deno.test("queuesRepo: getQueueById safe non-UUID validation", async () => {
   const result = await queuesRepo.getQueueById("not-a-valid-uuid", mockSql);
   assertEquals(result, null);
 });
+
+Deno.test("queuesRepo: deleteQueue deletes queue and entries and cancels outbox events", async () => {
+  const { mockSql, queues, queueEntries, outboxEvents } = createMockQueueDb();
+
+  const q = await queuesRepo.findOrCreateQueue(
+    {
+      workspaceId: "ws-1",
+      channelId: "C100",
+      name: "staging-deploy",
+      maxConcurrency: 1,
+      maxHoldMinutes: 30,
+    },
+    mockSql,
+  );
+
+  // Join queue to create an entry and outbox events
+  await queuesRepo.joinQueue(
+    {
+      queueId: q.id,
+      workspaceId: "ws-1",
+      slackUserId: "U1",
+    },
+    mockSql,
+  );
+
+  assertEquals(queues.length, 1);
+  assertEquals(queueEntries.length, 1);
+
+  // Delete the queue
+  const deleted = await queuesRepo.deleteQueue(
+    {
+      queueId: q.id,
+      workspaceId: "ws-1",
+    },
+    mockSql,
+  );
+
+  assertEquals(deleted?.id, q.id);
+  assertEquals(queues.length, 0);
+  assertEquals(queueEntries.length, 0);
+
+  // Pending outbox events for this queue should be cancelled
+  const pendingForQueue = outboxEvents.filter(
+    (e) => e.payload.queueId === q.id && e.status === "pending",
+  );
+  assertEquals(pendingForQueue.length, 0);
+});
+

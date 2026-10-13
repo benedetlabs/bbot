@@ -227,6 +227,63 @@ export const queuesRepo = {
     return queue.admin_user_ids.includes(userId);
   },
 
+  async deleteQueue(
+    params: {
+      queueId: string;
+      workspaceId: string;
+    },
+    sql: Sql = getSqlWrite(),
+  ): Promise<QueueRow | null> {
+    return await withTx(sql, async (tx) => {
+      const isUuid =
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+          params.queueId,
+        );
+      const rows = isUuid
+        ? await tx<QueueRow[]>`
+          SELECT * FROM queues WHERE id = ${params.queueId}::uuid FOR UPDATE
+        `
+        : await tx<QueueRow[]>`
+          SELECT * FROM queues WHERE id = ${params.queueId} FOR UPDATE
+        `;
+      if (rows.length === 0) {
+        return null;
+      }
+      const queue = rows[0];
+
+      // Cancel outbox events for this queue
+      await cancelOutboxEvents(tx, {
+        workspaceId: params.workspaceId,
+        eventType: "queue.check_expiration_warning",
+        filterPayloadKey: "queueId",
+        filterPayloadValue: queue.id,
+      });
+      await cancelOutboxEvents(tx, {
+        workspaceId: params.workspaceId,
+        eventType: "queue.auto_expire",
+        filterPayloadKey: "queueId",
+        filterPayloadValue: queue.id,
+      });
+      await cancelOutboxEvents(tx, {
+        workspaceId: params.workspaceId,
+        eventType: "queue.slot_promoted",
+        filterPayloadKey: "queueId",
+        filterPayloadValue: queue.id,
+      });
+
+      // Delete entries first (in case foreign key cascade is disabled or mocked)
+      if (isUuid) {
+        await tx`DELETE FROM queue_entries WHERE queue_id = ${queue.id}::uuid`;
+        await tx`DELETE FROM queues WHERE id = ${queue.id}::uuid`;
+      } else {
+        await tx`DELETE FROM queue_entries WHERE queue_id = ${queue.id}`;
+        await tx`DELETE FROM queues WHERE id = ${queue.id}`;
+      }
+
+      return queue;
+    });
+  },
+
   async updateStickyMessageTs(
     queueId: string,
     stickyMessageTs: string | null,

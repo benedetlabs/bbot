@@ -1196,3 +1196,187 @@ Deno.test("queue-app: queue_attach_secret_click blocked when allow_secret is fal
     else Deno.env.delete("QUEUE_APP_BOT_TOKEN");
   }
 });
+
+Deno.test("queue-app: /queue remove by non-admin is forbidden", async () => {
+  const origFindQueue = queuesRepo.findOrCreateQueue;
+  queuesRepo.findOrCreateQueue = (() => {
+    return Promise.resolve({
+      id: "queue-1",
+      workspace_id: "ws-1",
+      slack_channel_id: "C100",
+      name: "staging",
+      max_concurrency: 1,
+      max_hold_minutes: 45,
+      sticky_message_ts: "1700000000.999",
+      admin_user_ids: ["U_ADMIN"], // Non-admin user cannot delete
+      allow_secret: false,
+      created_at: new Date(),
+    });
+  }) as typeof queuesRepo.findOrCreateQueue;
+
+  try {
+    const body =
+      "command=%2Fqueue&text=remove&channel_id=C100&user_id=U_REGULAR&team_id=T1";
+    const headers = await createSignedHeaders(body);
+
+    const req = new Request("http://localhost:8080/slack/commands", {
+      method: "POST",
+      headers,
+      body,
+    });
+
+    const res = await app.fetch(req);
+    assertEquals(res.status, 200);
+    const json = await res.json();
+    assertEquals(json.response_type, "ephemeral");
+    assertEquals(json.text.includes("Apenas administradores da fila têm permissão"), true);
+  } finally {
+    queuesRepo.findOrCreateQueue = origFindQueue;
+  }
+});
+
+Deno.test("queue-app: /queue remove by admin deletes sticky message and queue from db", async () => {
+  let stickyDeleted = false;
+  let queueDeleted = false;
+  const origFindQueue = queuesRepo.findOrCreateQueue;
+  const origDeleteQueue = queuesRepo.deleteQueue;
+  const origDeleteMsg = slackApi.deleteMessage;
+
+  queuesRepo.findOrCreateQueue = (() => {
+    return Promise.resolve({
+      id: "queue-1",
+      workspace_id: "ws-1",
+      slack_channel_id: "C100",
+      name: "staging",
+      max_concurrency: 1,
+      max_hold_minutes: 45,
+      sticky_message_ts: "1700000000.999",
+      admin_user_ids: ["U_ADMIN"],
+      allow_secret: false,
+      created_at: new Date(),
+    });
+  }) as typeof queuesRepo.findOrCreateQueue;
+
+  queuesRepo.deleteQueue = ((params) => {
+    queueDeleted = true;
+    assertEquals(params.queueId, "queue-1");
+    return Promise.resolve({} as QueueRow);
+  }) as typeof queuesRepo.deleteQueue;
+
+  slackApi.deleteMessage = ((_token, channelId, ts) => {
+    stickyDeleted = true;
+    assertEquals(channelId, "C100");
+    assertEquals(ts, "1700000000.999");
+    return Promise.resolve({ ok: true });
+  }) as typeof slackApi.deleteMessage;
+
+  const origEnv = Deno.env.get("QUEUE_APP_BOT_TOKEN");
+  Deno.env.set("QUEUE_APP_BOT_TOKEN", "xoxb-queue-token");
+
+  try {
+    const body =
+      "command=%2Fqueue&text=delete&channel_id=C100&user_id=U_ADMIN&team_id=T1";
+    const headers = await createSignedHeaders(body);
+
+    const req = new Request("http://localhost:8080/slack/commands", {
+      method: "POST",
+      headers,
+      body,
+    });
+
+    const res = await app.fetch(req);
+    assertEquals(res.status, 200);
+    const json = await res.json();
+    assertEquals(json.response_type, "in_channel");
+    assertEquals(json.text.includes("removeu a fila do canal"), true);
+    assertEquals(stickyDeleted, true);
+    assertEquals(queueDeleted, true);
+  } finally {
+    queuesRepo.findOrCreateQueue = origFindQueue;
+    queuesRepo.deleteQueue = origDeleteQueue;
+    slackApi.deleteMessage = origDeleteMsg;
+    if (origEnv !== undefined) Deno.env.set("QUEUE_APP_BOT_TOKEN", origEnv);
+    else Deno.env.delete("QUEUE_APP_BOT_TOKEN");
+  }
+});
+
+Deno.test("queue-app: queue_delete_confirm_modal view_submission deletes queue and posts announcement", async () => {
+  let queueDeleted = false;
+  let announcementPosted = false;
+  const origGetQueueById = queuesRepo.getQueueById;
+  const origDeleteQueue = queuesRepo.deleteQueue;
+  const origDeleteMsg = slackApi.deleteMessage;
+  const origPostMsg = slackApi.postMessage;
+
+  queuesRepo.getQueueById = (() => {
+    return Promise.resolve({
+      id: "queue-1",
+      workspace_id: "ws-1",
+      slack_channel_id: "C100",
+      name: "staging",
+      max_concurrency: 1,
+      max_hold_minutes: 45,
+      sticky_message_ts: "1700000000.999",
+      admin_user_ids: ["U_ADMIN"],
+      allow_secret: false,
+      created_at: new Date(),
+    });
+  }) as typeof queuesRepo.getQueueById;
+
+  queuesRepo.deleteQueue = ((params) => {
+    queueDeleted = true;
+    assertEquals(params.queueId, "queue-1");
+    return Promise.resolve({} as QueueRow);
+  }) as typeof queuesRepo.deleteQueue;
+
+  slackApi.deleteMessage = () => Promise.resolve({ ok: true });
+  slackApi.postMessage = (_token, channelId, msg) => {
+    announcementPosted = true;
+    assertEquals(channelId, "C100");
+    assertEquals(msg.text?.includes("removeu a fila do canal"), true);
+    return Promise.resolve({ ok: true });
+  };
+
+  const origEnv = Deno.env.get("QUEUE_APP_BOT_TOKEN");
+  Deno.env.set("QUEUE_APP_BOT_TOKEN", "xoxb-queue-token");
+
+  try {
+    const payload = {
+      type: "view_submission",
+      team: { id: "T1" },
+      user: { id: "U_ADMIN" },
+      view: {
+        callback_id: "queue_delete_confirm_modal",
+        private_metadata: JSON.stringify({
+          queueId: "queue-1",
+          channelId: "C100",
+          channelName: "staging",
+        }),
+      },
+    };
+
+    const body = `payload=${encodeURIComponent(JSON.stringify(payload))}`;
+    const headers = await createSignedHeaders(body);
+
+    const req = new Request("http://localhost:8080/slack/interactions", {
+      method: "POST",
+      headers,
+      body,
+    });
+
+    const res = await app.fetch(req);
+    assertEquals(res.status, 200);
+    const json = await res.json();
+    assertEquals(json.response_action, "clear");
+    assertEquals(queueDeleted, true);
+    assertEquals(announcementPosted, true);
+  } finally {
+    queuesRepo.getQueueById = origGetQueueById;
+    queuesRepo.deleteQueue = origDeleteQueue;
+    slackApi.deleteMessage = origDeleteMsg;
+    slackApi.postMessage = origPostMsg;
+    if (origEnv !== undefined) Deno.env.set("QUEUE_APP_BOT_TOKEN", origEnv);
+    else Deno.env.delete("QUEUE_APP_BOT_TOKEN");
+  }
+});
+

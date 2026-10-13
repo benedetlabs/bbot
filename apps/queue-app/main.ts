@@ -7,6 +7,7 @@ import { Hono } from "hono";
 import {
   buildQueueCard,
   buildQueueConfigModal,
+  buildQueueDeleteConfirmModal,
   buildSecretModal,
   type QueueHolder,
   type QueueWaiter,
@@ -225,6 +226,7 @@ app.post(
           `• \`/queue extend [minutes]\` — Extend your active hold time (default +15m).\n` +
           `• \`/queue kick @user\` — *(Admin)* Remove user from lock or queue.\n` +
           `• \`/queue config\` or \`/queue edit\` — *(Admin)* Configure slots, max hold time, secrets, and admins.\n` +
+          `• \`/queue remove\` or \`/queue delete\` — *(Admin)* Remove and terminate the queue in this channel.\n` +
           `• \`/queue bump\` — Move queue card to the bottom of the channel.`,
       });
     }
@@ -244,6 +246,9 @@ app.post(
       "create",
       "bump",
       "recreate",
+      "delete",
+      "remove",
+      "destroy",
     ];
     if (!knownCommands.includes(firstWord)) {
       return c.json({
@@ -293,6 +298,46 @@ app.post(
         response_type: "ephemeral",
         text:
           `⚙️ Use o botão *Configurar* no card da fila para abrir o modal de configuração.`,
+      });
+    }
+
+    // 2.5. DELETE / REMOVE / DESTROY (Admin restricted)
+    if (
+      firstWord === "delete" ||
+      firstWord === "remove" ||
+      firstWord === "destroy"
+    ) {
+      if (!queuesRepo.isUserAdmin(queue, userId)) {
+        return c.json({
+          response_type: "ephemeral",
+          text:
+            `🚫 Apenas administradores da fila têm permissão para remover ou encerrar a fila deste canal.`,
+        });
+      }
+
+      // Delete the sticky message from Slack if present
+      if (queue.sticky_message_ts && botToken) {
+        try {
+          await slackApi.deleteMessage(
+            botToken,
+            channelId,
+            queue.sticky_message_ts,
+          );
+        } catch (err) {
+          console.warn("Failed to delete sticky queue message from Slack:", err);
+        }
+      }
+
+      // Delete from DB and cancel pending outbox events
+      await queuesRepo.deleteQueue({
+        queueId: queue.id,
+        workspaceId,
+      });
+
+      return c.json({
+        response_type: "in_channel",
+        text:
+          `🗑️ <@${userId}> removeu a fila do canal #${channelName}. O card e os slots foram encerrados.`,
       });
     }
 
@@ -634,6 +679,63 @@ app.post(
 
         return c.json({ response_action: "clear" });
       }
+
+      if (callbackId === "queue_delete_confirm_modal") {
+        const metaStr = payload.view?.private_metadata ?? "{}";
+        let meta: { queueId?: string; channelId?: string; channelName?: string } = {};
+        try {
+          meta = JSON.parse(metaStr);
+        } catch {
+          // ignore
+        }
+        const queueId = meta.queueId;
+        const targetChannelId = meta.channelId || channelId;
+        const targetChannelName = meta.channelName || "fila";
+
+        if (queueId) {
+          const q = await queuesRepo.getQueueById(queueId);
+          if (q && queuesRepo.isUserAdmin(q, userId)) {
+            // Delete sticky message from Slack channel
+            if (q.sticky_message_ts && botToken && targetChannelId) {
+              try {
+                await slackApi.deleteMessage(
+                  botToken,
+                  targetChannelId,
+                  q.sticky_message_ts,
+                );
+              } catch (err) {
+                console.warn(
+                  "Failed to delete sticky message on queue removal:",
+                  err,
+                );
+              }
+            }
+
+            // Delete queue and entries
+            await queuesRepo.deleteQueue({
+              queueId: q.id,
+              workspaceId,
+            });
+
+            // Post public announcement in channel
+            if (botToken && targetChannelId) {
+              try {
+                await slackApi.postMessage(botToken, targetChannelId, {
+                  text:
+                    `🗑️ <@${userId}> removeu a fila do canal #${targetChannelName}. O card e os slots foram encerrados.`,
+                });
+              } catch (err) {
+                console.warn(
+                  "Failed to post queue deletion announcement:",
+                  err,
+                );
+              }
+            }
+          }
+        }
+
+        return c.json({ response_action: "clear" });
+      }
     }
 
     // Handle block actions
@@ -742,6 +844,50 @@ app.post(
           await slackApi.openView(botToken, triggerId, modalView);
         }
         return c.text("OK");
+      }
+
+      // 2.5. Queue Delete Click from Config Modal (Admin only)
+      if (actionId === "queue_delete_modal_click") {
+        if (!queuesRepo.isUserAdmin(queue, userId)) {
+          if (botToken && channelId) {
+            await slackApi.postEphemeral(botToken, channelId, userId, {
+              text:
+                "🚫 Apenas administradores da fila têm permissão para remover ou excluir a fila.",
+            });
+          }
+          return c.text("OK");
+        }
+
+        const confirmModal = buildQueueDeleteConfirmModal({
+          queueId: queue.id,
+          channelId: channelId || queue.slack_channel_id,
+          channelName: queue.name,
+        });
+
+        if (triggerId && botToken) {
+          try {
+            const baseUrl = Deno.env.get("SLACK_API_URL") ??
+              "https://slack.com/api";
+            await fetch(`${baseUrl}/views.push`, {
+              method: "POST",
+              headers: {
+                "Authorization": `Bearer ${botToken}`,
+                "Content-Type": "application/json; charset=utf-8",
+              },
+              body: JSON.stringify({
+                trigger_id: triggerId,
+                view: confirmModal,
+              }),
+            });
+          } catch (err) {
+            console.error("Failed to push delete confirm modal:", err);
+          }
+        }
+
+        return c.json({
+          response_action: "push",
+          view: confirmModal,
+        });
       }
 
       // 3. Join click
