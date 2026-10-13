@@ -1,0 +1,12 @@
+# Copie para infra/02-releases/terraform.tfvars (nunca comite no Git!)
+github_username           = "benedetlabs"
+github_token              = "ghp_SEU_GITHUB_TOKEN_READ_PACKAGES"
+image_tag                 = "v1.0.0"
+
+app_replicas              = 2
+worker_replicas           = 2
+
+openobserve_admin_email   = "benedetlabs@gmail.com"
+secret_app_signing_secret = "SEU_SLACK_SECRET_SIGNING"
+queue_app_signing_secret  = "SEU_SLACK_QUEUE_SIGNING"
+todo_app_signing_secret   = "SEU_SLACK_TODO_SIGNING"

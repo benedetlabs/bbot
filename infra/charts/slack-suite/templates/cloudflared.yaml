@@ -1,0 +1,42 @@
+{{- if .Values.cloudflared.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudflared-tunnel
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: cloudflared
+spec:
+  replicas: {{ .Values.cloudflared.replicas }}
+  selector:
+    matchLabels:
+      app: cloudflared
+  template:
+    metadata:
+      labels:
+        app: cloudflared
+    spec:
+      {{- if .Values.cloudflared.nodeSelector }}
+      nodeSelector:
+{{ toYaml .Values.cloudflared.nodeSelector | indent 8 }}
+      {{- end }}
+      containers:
+        - name: cloudflared
+          image: {{ .Values.cloudflared.image | quote }}
+          args:
+            - tunnel
+            - --no-autoupdate
+            - run
+          env:
+            - name: TUNNEL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: cloudflare-tunnel-token
+                  key: TUNNEL_TOKEN
+          resources:
+{{ toYaml .Values.cloudflared.resources | indent 12 }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            allowPrivilegeEscalation: false
+{{- end }}

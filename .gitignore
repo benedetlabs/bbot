@@ -23,3 +23,14 @@ Thumbs.db
 *.swp
 *~
 *.bak
+
+# Terraform & Helm Secrets
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+crash.log
+*.tfvars
+!*.tfvars.example
+values-prod.yaml
+values.secret.yaml
+

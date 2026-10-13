@@ -1,0 +1,176 @@
+{{- if .Values.postgres.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pg18-init-sql
+  namespace: {{ .Release.Namespace }}
+data:
+  001_init.sql: |
+{{ .Files.Get "files/001_init.sql" | indent 4 }}
+---
+# StatefulSet garante identidade de rede fixa (postgres-origin-0) e vínculo permanente com o PVC
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres-origin
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: postgres-origin
+spec:
+  serviceName: postgres-origin-svc
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres-origin
+  template:
+    metadata:
+      labels:
+        app: postgres-origin
+    spec:
+      {{- if .Values.postgres.nodeSelector }}
+      nodeSelector:
+{{ toYaml .Values.postgres.nodeSelector | indent 8 }}
+      {{- end }}
+      containers:
+        - name: postgres
+          image: {{ .Values.postgres.image | quote }}
+          args:
+            - "postgres"
+            - "-c"
+            - "wal_level=logical"
+            - "-c"
+            - "max_replication_slots=10"
+            - "-c"
+            - "max_wal_senders=10"
+            - "-c"
+            - "max_connections={{ .Values.postgres.maxConnections }}"
+            - "-c"
+            - "shared_buffers={{ .Values.postgres.sharedBuffers }}"
+            - "-c"
+            - "effective_cache_size={{ .Values.postgres.effectiveCacheSize }}"
+            - "-c"
+            - "work_mem={{ .Values.postgres.workMem }}"
+            - "-c"
+            - "maintenance_work_mem={{ .Values.postgres.maintenanceWorkMem }}"
+            - "-c"
+            - "checkpoint_completion_target=0.9"
+            - "-c"
+            - "random_page_cost=1.1"
+          ports:
+            - containerPort: 5432
+              name: postgresql
+          envFrom:
+            - secretRef:
+                name: suite-secrets
+          env:
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: pgdata
+              mountPath: /var/lib/postgresql/data
+            - name: init-sql
+              mountPath: /docker-entrypoint-initdb.d
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"]
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+{{ toYaml .Values.postgres.resources | indent 12 }}
+      volumes:
+        - name: init-sql
+          configMap:
+            name: pg18-init-sql
+  volumeClaimTemplates:
+    - metadata:
+        name: pgdata
+        annotations:
+          helm.sh/resource-policy: keep
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: {{ .Values.postgres.storageClassName | quote }}
+        resources:
+          requests:
+            storage: {{ .Values.postgres.storageSize | quote }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-origin-svc
+  namespace: {{ .Release.Namespace }}
+spec:
+  type: ClusterIP
+  selector:
+    app: postgres-origin
+  ports:
+    - name: postgresql
+      port: 5432
+      targetPort: 5432
+
+{{- if .Values.postgres.backup.enabled }}
+---
+# Volume dedicado para armazenar snapshots pg_dump comprimidos (também com Retain)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pg18-backups-pvc
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ .Values.postgres.storageClassName | quote }}
+  resources:
+    requests:
+      storage: {{ .Values.postgres.backup.storageSize | quote }}
+---
+# CronJob que gera dump completo de planos/clientes a cada 6h e limpa arquivos > 14 dias
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: pg18-automated-backup
+  namespace: {{ .Release.Namespace }}
+spec:
+  schedule: {{ .Values.postgres.backup.schedule | quote }}
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          {{- if .Values.postgres.nodeSelector }}
+          nodeSelector:
+{{ toYaml .Values.postgres.nodeSelector | indent 12 }}
+          {{- end }}
+          restartPolicy: OnFailure
+          containers:
+            - name: pg-backup
+              image: {{ .Values.postgres.image | quote }}
+              envFrom:
+                - secretRef:
+                    name: suite-secrets
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -e
+                  TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+                  BACKUP_FILE="/backups/slack_suite_${TIMESTAMP}.dump"
+                  echo "Iniciando backup do PostgreSQL 18 em ${BACKUP_FILE}..."
+                  PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -Fc -h postgres-origin-svc -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f "$BACKUP_FILE"
+                  find /backups -name "slack_suite_*.dump" -mtime +{{ .Values.postgres.backup.retentionDays }} -delete
+                  echo "Backup concluído com sucesso!"
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: pg18-backups-pvc
+{{- end }}
+{{- end }}

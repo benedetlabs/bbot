@@ -1,0 +1,33 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: isolate-postgresql
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: postgres-origin
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: secret-app
+        - podSelector:
+            matchLabels:
+              app: queue-app
+        - podSelector:
+            matchLabels:
+              app: todo-app
+        - podSelector:
+            matchLabels:
+              app: outbox-worker
+        - podSelector:
+            matchLabels:
+              app: pgcache
+      ports:
+        - protocol: TCP
+          port: 5432
+{{- end }}

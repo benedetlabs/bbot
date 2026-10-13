@@ -1,0 +1,17 @@
+apiVersion: v2
+name: slack-suite
+description: Helm Chart unificado para a suíte BenedetLabsBots (PostgreSQL 18, PgCache, Deno 2.9 Bots, Outbox Worker e Cloudflare Tunnel)
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+keywords:
+  - slack
+  - k3s
+  - civo
+  - postgresql-18
+  - pgcache
+  - deno
+  - cloudflare-tunnel
+maintainers:
+  - name: Leonardo Benedet
+    email: benedetlabs@gmail.com

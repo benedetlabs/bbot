@@ -1,0 +1,61 @@
+{{- if .Values.worker.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: outbox-worker
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: outbox-worker
+    app.kubernetes.io/part-of: slack-suite
+spec:
+  replicas: {{ .Values.worker.replicas }}
+  selector:
+    matchLabels:
+      app: outbox-worker
+  template:
+    metadata:
+      labels:
+        app: outbox-worker
+    spec:
+      {{- if .Values.worker.nodeSelector }}
+      nodeSelector:
+{{ toYaml .Values.worker.nodeSelector | indent 8 }}
+      {{- end }}
+      {{- if .Values.global.imagePullSecretName }}
+      imagePullSecrets:
+        - name: {{ .Values.global.imagePullSecretName }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+      containers:
+        - name: outbox-worker
+          image: "{{ .Values.global.imageRegistry }}/outbox-worker:{{ .Values.global.imageTag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          envFrom:
+            - secretRef:
+                name: suite-secrets
+          env:
+            - name: WORKER_POLL_INTERVAL_MS
+              value: {{ .Values.worker.pollIntervalMs | quote }}
+            - name: WORKER_BATCH_SIZE
+              value: {{ .Values.worker.batchSize | quote }}
+            {{- if .Values.worker.otelEnabled }}
+            - name: OTEL_DENO
+              value: "true"
+            - name: OTEL_SERVICE_NAME
+              value: "outbox-worker"
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: "http/protobuf"
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://openobserve-svc.{{ .Release.Namespace }}.svc.cluster.local:5080/api/default"
+            {{- end }}
+          resources:
+{{ toYaml .Values.worker.resources | indent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+{{- end }}

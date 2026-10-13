@@ -1,0 +1,153 @@
+# ============================================================================
+# Valores do Helm Chart: slack-suite (4 Node Pools + Disco Retain + OpenObserve)
+# ============================================================================
+
+global:
+  imageRegistry: "ghcr.io/benedetlabs"
+  imageTag: "v1.0.0"
+  imagePullPolicy: IfNotPresent
+  imagePullSecretName: "ghcr-secret"
+
+# StorageClass Durável (reclaimPolicy: Retain -> Nunca apaga o disco no uninstall!)
+storageClass:
+  create: true
+  name: "civo-volume-retain"
+  provisioner: "csi.civo.com"
+
+# Credenciais e chaves (sobrescreva via --set ou values-prod.yaml)
+secrets:
+  postgresUser: "suite_user"
+  postgresPassword: "CHANGE_ME_STRONG_PASSWORD"
+  postgresDb: "slack_suite"
+  masterEncryptionKeyHex: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  secretAppSigningSecret: "CHANGE_ME_SECRET_SIGNING"
+  queueAppSigningSecret: "CHANGE_ME_QUEUE_SIGNING"
+  todoAppSigningSecret: "CHANGE_ME_TODO_SIGNING"
+  cloudflareTunnelToken: ""
+  # Credenciais de Admin do OpenObserve (https://observe.seudominio.com)
+  openobserveAdminEmail: "benedetlabs@gmail.com"
+  openobserveAdminPassword: "CHANGE_ME_OPENOBSERVE_PASSWORD"
+
+# ============================================================================
+# POOL 1: BANCO DE DADOS DEDICADO (db-pool: g4s.kube.medium - 4 vCPU, 8 GB RAM)
+# ============================================================================
+postgres:
+  enabled: true
+  image: "postgres:18-alpine"
+  nodeSelector:
+    workload-tier: "database"
+  storageClassName: "civo-volume-retain"
+  storageSize: "50Gi"
+  # Tuning dedicado para máquina de 8 GB RAM:
+  sharedBuffers: "2GB"
+  effectiveCacheSize: "6GB"
+  workMem: "16MB"
+  maintenanceWorkMem: "512MB"
+  maxConnections: "200"
+  resources:
+    requests:
+      cpu: "1500m"
+      memory: "4Gi"
+    limits:
+      cpu: "3500m"
+      memory: "6Gi"
+  # Backup automático a cada 6 horas em volume SSD separado (Retain)
+  backup:
+    enabled: true
+    schedule: "0 */6 * * *"
+    storageSize: "20Gi"
+    retentionDays: 14
+
+# ============================================================================
+# POOL 2: PGCACHE DEDICADO (cache-pool: g4s.kube.small - 2 vCPU, 4 GB RAM)
+# ============================================================================
+pgcache:
+  enabled: true
+  image: "pgcache/pgcache:latest"
+  nodeSelector:
+    workload-tier: "cache"
+  publicationName: "pgcache_suite_pub"
+  slotName: "pgcache_suite_slot"
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "1500m"
+      memory: "3Gi"
+
+# ============================================================================
+# POOL 3: APLICAÇÕES DENO + WORKER + TUNNEL (app-pool: g4s.kube.medium - 4 vCPU, 8 GB RAM)
+# ============================================================================
+apps:
+  replicas: 2
+  nodeSelector:
+    workload-tier: "apps"
+  otelEnabled: true
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "256Mi"
+  items:
+    - name: secret-app
+    - name: queue-app
+    - name: todo-app
+
+worker:
+  enabled: true
+  replicas: 2
+  nodeSelector:
+    workload-tier: "apps"
+  otelEnabled: true
+  pollIntervalMs: "250"
+  batchSize: "25"
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "256Mi"
+
+cloudflared:
+  enabled: true
+  replicas: 2
+  nodeSelector:
+    workload-tier: "apps"
+  image: "cloudflare/cloudflared:latest"
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "250m"
+      memory: "128Mi"
+
+# ============================================================================
+# POOL 4: OBSERVABILIDADE COMPLETA (obs-pool: g4s.kube.medium - 4 vCPU, 8 GB RAM)
+# OpenObserve (Logs, Métricas, Traces OTLP) + OpenTelemetry Collector DaemonSet
+# ============================================================================
+openobserve:
+  enabled: true
+  image: "public.ecr.aws/zinclabs/openobserve:latest"
+  nodeSelector:
+    workload-tier: "observability"
+  storageClassName: "civo-volume-retain"
+  storageSize: "30Gi"
+  resources:
+    requests:
+      cpu: "1000m"
+      memory: "2Gi"
+    limits:
+      cpu: "3000m"
+      memory: "5Gi"
+  otelCollector:
+    enabled: true
+    image: "otel/opentelemetry-collector-contrib:latest"
+
+# Blindagem Leste-Oeste (NetworkPolicy para o PostgreSQL 18)
+networkPolicy:
+  enabled: true

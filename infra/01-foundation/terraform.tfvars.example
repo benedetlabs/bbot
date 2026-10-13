@@ -1,0 +1,12 @@
+# Copie para infra/01-foundation/terraform.tfvars (nunca comite no Git!)
+environment           = "prod"
+project_name          = "benedetlabs"
+
+civo_token            = "SUA_CIVO_API_KEY"
+civo_region           = "NYC1"
+ssh_public_key_path   = "~/.ssh/id_ed25519_civo.pub"
+
+cloudflare_api_token  = "SEU_CLOUDFLARE_API_TOKEN"
+cloudflare_account_id = "SEU_CLOUDFLARE_ACCOUNT_ID"
+cloudflare_zone_id    = "SEU_CLOUDFLARE_ZONE_ID"
+domain_name           = "seudominio.com"

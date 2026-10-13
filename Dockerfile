@@ -12,8 +12,9 @@ COPY deno.json deno.lock* .npmrc ./
 COPY packages/ ./packages/
 COPY apps/${APP_NAME}/ ./apps/${APP_NAME}/
 
-# 2. Compile standalone native executable
+# 2. Compile standalone native executable with built-in OpenTelemetry support
 RUN deno compile \
+    --unstable-otel \
     --allow-net \
     --allow-env \
     --output /workspace/bin/app-runner \

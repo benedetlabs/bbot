@@ -1,0 +1,87 @@
+{{- range .Values.apps.items }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    app: {{ .name }}
+    app.kubernetes.io/part-of: slack-suite
+spec:
+  replicas: {{ $.Values.apps.replicas }}
+  selector:
+    matchLabels:
+      app: {{ .name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .name }}
+    spec:
+      {{- if $.Values.apps.nodeSelector }}
+      nodeSelector:
+{{ toYaml $.Values.apps.nodeSelector | indent 8 }}
+      {{- end }}
+      {{- if $.Values.global.imagePullSecretName }}
+      imagePullSecrets:
+        - name: {{ $.Values.global.imagePullSecretName }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+      containers:
+        - name: {{ .name }}
+          image: "{{ $.Values.global.imageRegistry }}/{{ .name }}:{{ $.Values.global.imageTag }}"
+          imagePullPolicy: {{ $.Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: 8080
+              name: http
+          envFrom:
+            - secretRef:
+                name: suite-secrets
+          {{- if $.Values.apps.otelEnabled }}
+          env:
+            - name: OTEL_DENO
+              value: "true"
+            - name: OTEL_SERVICE_NAME
+              value: {{ .name | quote }}
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: "http/protobuf"
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://openobserve-svc.{{ $.Release.Namespace }}.svc.cluster.local:5080/api/default"
+          {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+{{ toYaml $.Values.apps.resources | indent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .name }}-svc
+  namespace: {{ $.Release.Namespace }}
+spec:
+  type: ClusterIP
+  selector:
+    app: {{ .name }}
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+{{- end }}
