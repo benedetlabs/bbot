@@ -195,6 +195,7 @@ export interface SlackBlockMessagePayload extends SlackMessagePayload {
 export function buildSecretModal(options?: {
   defaultChannelId?: string;
   initialContext?: string;
+  initialContent?: string;
 }): SlackModalView {
   return {
     type: "modal",
@@ -230,6 +231,7 @@ export function buildSecretModal(options?: {
           type: "plain_text_input",
           action_id: "secret_content_input",
           multiline: true,
+          initial_value: options?.initialContent ?? "",
           placeholder: {
             type: "plain_text",
             text:

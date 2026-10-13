@@ -78,7 +78,7 @@ app.post(
     // Modal view specification
     const modalView = buildSecretModal({
       defaultChannelId: channelId,
-      initialContext: text,
+      initialContent: text,
     });
 
     // Record MAU tracking asynchronously

@@ -120,6 +120,8 @@ Deno.test("secret-app: POST /slack/commands opens secret modal for valid signatu
   assertEquals(json.response_action, "open");
   assertEquals(json.view.type, "modal");
   assertEquals(json.view.callback_id, "secret_create_modal");
+  const secretContentInput = json.view.blocks[0].element;
+  assertEquals(secretContentInput.initial_value, "Staging Token");
 });
 
 Deno.test("secret-app: POST /slack/commands dispatches views.open when trigger_id and bot token present", async () => {
