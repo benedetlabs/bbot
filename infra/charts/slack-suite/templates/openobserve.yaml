@@ -125,9 +125,26 @@ data:
           filesystem: {}
           load: {}
           network: {}
+      postgresql:
+        endpoint: postgres-origin-svc.{{ .Release.Namespace }}.svc.cluster.local:5432
+        transport: tcp
+        username: "${env:POSTGRES_USER}"
+        password: "${env:POSTGRES_PASSWORD}"
+        databases:
+          - "${env:POSTGRES_DB}"
+        collection_interval: 30s
+        tls:
+          insecure: true
+      prometheus:
+        config:
+          scrape_configs:
+            - job_name: "pgcache"
+              scrape_interval: 30s
+              static_configs:
+                - targets: ["pgcache-svc.{{ .Release.Namespace }}.svc.cluster.local:9090"]
       filelog:
         include:
-          - /var/log/pods/*/*/*.log
+          - /var/log/pods/{{ .Release.Namespace }}_*/*/*.log
         start_at: end
         include_file_path: true
 
@@ -149,7 +166,7 @@ data:
     service:
       pipelines:
         metrics:
-          receivers: [otlp, hostmetrics]
+          receivers: [otlp, hostmetrics, postgresql, prometheus]
           processors: [memory_limiter, batch]
           exporters: [otlphttp/openobserve]
         logs:
@@ -187,6 +204,21 @@ spec:
                 secretKeyRef:
                   name: suite-secrets
                   key: OPENOBSERVE_BASIC_AUTH
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: suite-secrets
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: suite-secrets
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: suite-secrets
+                  key: POSTGRES_DB
           resources:
             requests:
               cpu: "50m"

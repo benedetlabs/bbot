@@ -50,12 +50,16 @@ spec:
               value: "http/protobuf"
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: "http://otel-collector-svc.{{ .Release.Namespace }}.svc.cluster.local:4318"
+            - name: OTEL_BSP_SCHEDULE_DELAY
+              value: "2000"
+            - name: OTEL_METRIC_EXPORT_INTERVAL
+              value: "15000"
             {{- end }}
           resources:
 {{ toYaml .Values.worker.resources | indent 12 }}
           securityContext:
             allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
+            readOnlyRootFilesystem: false
             capabilities:
               drop: ["ALL"]
 {{- end }}

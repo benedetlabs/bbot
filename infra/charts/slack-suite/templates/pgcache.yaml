@@ -26,9 +26,13 @@ spec:
           ports:
             - containerPort: 5432
               name: pgcache
+            - containerPort: 9090
+              name: metrics
           env:
             - name: LISTEN_PORT
               value: "5432"
+            - name: METRICS_PORT
+              value: "9090"
             - name: NUM_WORKERS
               value: "2"
             - name: ORIGIN_HOST
@@ -74,4 +78,7 @@ spec:
     - name: pgcache
       port: 5433
       targetPort: 5432
+    - name: metrics
+      port: 9090
+      targetPort: 9090
 {{- end }}

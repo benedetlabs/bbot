@@ -1,36 +1,25 @@
 # syntax=docker/dockerfile:1.7
 # ============================================================================
-# STAGE 1: BUILDER (Deno 2.9 Monorepo Compiler)
+# PRODUCTION RUNTIME (Deno 2.9 Alpine Non-Root + Native OpenTelemetry)
 # ============================================================================
-FROM denoland/deno:2.9.7 AS builder
+FROM denoland/deno:alpine-2.9.7 AS runtime
 
 ARG APP_NAME=secret-app
-WORKDIR /workspace
+WORKDIR /app
+
+ENV DENO_DIR=/app/.deno_cache
+ENV APP_NAME=${APP_NAME}
 
 # 1. Copy dependency and workspace manifests
 COPY deno.json deno.lock* .npmrc ./
 COPY packages/ ./packages/
 COPY apps/ ./apps/
 
-# 2. Compile standalone native executable with built-in OpenTelemetry support
-RUN deno compile \
-    --unstable-otel \
-    --allow-net \
-    --allow-env \
-    --output /workspace/bin/app-runner \
-    ./apps/${APP_NAME}/main.ts
+# 2. Pre-cache all dependencies at build time and grant ownership to nonroot (65532)
+RUN deno cache ./apps/${APP_NAME}/main.ts && \
+    chown -R 65532:65532 /app
 
-# ============================================================================
-# STAGE 2: PRODUCTION RUNTIME (Distroless Non-Root)
-# ============================================================================
-FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
-
-WORKDIR /app
-
-# Copy compiled binary only (Zero Node/NPM cache, zero disk write)
-COPY --from=builder /workspace/bin/app-runner /app/app-runner
-
-USER nonroot:nonroot
+USER 65532:65532
 EXPOSE 8080
 
-ENTRYPOINT ["/app/app-runner"]
+ENTRYPOINT ["sh", "-c", "exec deno run --unstable-otel --cached-only --allow-net --allow-env ./apps/${APP_NAME}/main.ts"]

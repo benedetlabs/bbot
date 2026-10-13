@@ -4,7 +4,7 @@
 
 global:
   imageRegistry: "ghcr.io/benedetlabs"
-  imagePullPolicy: IfNotPresent
+  imagePullPolicy: Always
   imagePullSecretName: "ghcr-secret"
 
 # StorageClass Durável (reclaimPolicy: Retain -> Nunca apaga o disco no uninstall!)
