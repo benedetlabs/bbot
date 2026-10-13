@@ -10,7 +10,7 @@ features:
     always_online: true
   slash_commands:
     - command: "/queue"
-      url: "https://your-domain.com/slack/commands"
+      url: "https://queue.bsuit.app/slack/commands"
       description: "Manage channel deployment queues and resource locks"
       usage_hint: "[join | done | extend | kick | status | help]"
       should_escape: false
@@ -26,7 +26,7 @@ oauth_config:
 settings:
   interactivity:
     is_enabled: true
-    request_url: "https://your-domain.com/slack/interactions"
+    request_url: "https://queue.bsuit.app/slack/interactions"
   org_deploy_enabled: false
   socket_mode_enabled: false
   token_rotation_enabled: false

@@ -15,7 +15,7 @@ features:
       description: "Convert this message into a personal or delegated task"
   slash_commands:
     - command: "/todo"
-      url: "https://your-domain.com/slack/commands"
+      url: "https://todo.bsuit.app/slack/commands"
       description: "Create and schedule a quick task"
       usage_hint: "[e.g. review staging PR tomorrow at 3pm]"
       should_escape: false
@@ -32,12 +32,12 @@ oauth_config:
 
 settings:
   event_subscriptions:
-    request_url: "https://your-domain.com/slack/events"
+    request_url: "https://todo.bsuit.app/slack/events"
     bot_events:
       - app_home_opened
   interactivity:
     is_enabled: true
-    request_url: "https://your-domain.com/slack/interactions"
+    request_url: "https://todo.bsuit.app/slack/interactions"
   org_deploy_enabled: false
   socket_mode_enabled: false
   token_rotation_enabled: false

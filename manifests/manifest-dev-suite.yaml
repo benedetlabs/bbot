@@ -15,17 +15,17 @@ features:
       description: "Convert this message into a task"
   slash_commands:
     - command: "/secret"
-      url: "https://your-domain.com/slack/commands"
+      url: "https://secret.bsuit.app/slack/commands"
       description: "Share an ephemeral encrypted secret"
       usage_hint: "[optional text or empty for modal]"
       should_escape: false
     - command: "/queue"
-      url: "https://your-domain.com/slack/commands"
+      url: "https://queue.bsuit.app/slack/commands"
       description: "Manage channel deployment queue"
       usage_hint: "[join | done | extend | kick | status]"
       should_escape: false
     - command: "/todo"
-      url: "https://your-domain.com/slack/commands"
+      url: "https://todo.bsuit.app/slack/commands"
       description: "Create and schedule a task"
       usage_hint: "[task title with natural date]"
       should_escape: false
@@ -43,12 +43,12 @@ oauth_config:
 
 settings:
   event_subscriptions:
-    request_url: "https://your-domain.com/slack/events"
+    request_url: "https://todo.bsuit.app/slack/events"
     bot_events:
       - app_home_opened
   interactivity:
     is_enabled: true
-    request_url: "https://your-domain.com/slack/interactions"
+    request_url: "https://secret.bsuit.app/slack/interactions"
   org_deploy_enabled: false
   socket_mode_enabled: false
   token_rotation_enabled: false
