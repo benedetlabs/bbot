@@ -1,6 +1,6 @@
 provider "civo" {
-  token  = var.civo_token
-  region = var.civo_region
+  credentials_file = pathexpand("~/.civo.json")
+  region           = var.civo_region
 }
 
 provider "cloudflare" {

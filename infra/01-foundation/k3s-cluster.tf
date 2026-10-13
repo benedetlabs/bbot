@@ -1,19 +1,34 @@
 # ============================================================================
-# ESCOPO: CLUSTER K3S MULTI-POOL & ROTULAGEM DE NÓS (CIVO)
+# ESCOPO: CLUSTER K3S & NODE POOLS DEDICADOS (CIVO)
 # ============================================================================
 resource "civo_kubernetes_cluster" "k3s" {
   name        = local.cluster_name
-  network_id  = data.civo_network.default.id
+  network_id  = civo_network.k3s.id
   firewall_id = civo_firewall.k3s.id
 
-  # Gera dinamicamente os 4 Node Pools dedicados a partir de var.node_pools
-  dynamic "pools" {
-    for_each = var.node_pools
-    content {
-      label      = pools.key
-      size       = pools.value.size
-      node_count = pools.value.node_count
+  # Pool primário do cluster: app-pool (Apps Deno + Worker + Cloudflared)
+  pools {
+    label      = "app-pool"
+    size       = var.node_pools["app-pool"].size
+    node_count = var.node_pools["app-pool"].node_count
+    labels = {
+      "workload-tier" = var.node_pools["app-pool"].workload_tier
     }
+  }
+}
+
+# Node Pools adicionais isolados (db-pool, cache-pool, obs-pool) com labels nativas K8s
+resource "civo_kubernetes_node_pool" "dedicated" {
+  for_each = {
+    for k, v in var.node_pools : k => v if k != "app-pool"
+  }
+
+  cluster_id = civo_kubernetes_cluster.k3s.id
+  label      = each.key
+  size       = each.value.size
+  node_count = each.value.node_count
+  labels = {
+    "workload-tier" = each.value.workload_tier
   }
 }
 
@@ -22,28 +37,6 @@ resource "local_sensitive_file" "kubeconfig" {
   content         = civo_kubernetes_cluster.k3s.kubeconfig
   filename        = pathexpand(var.kubeconfig_output_path)
   file_permission = "0600"
-}
 
-# Aplica automaticamente a label `workload-tier` em cada nó de acordo com o seu pool
-resource "null_resource" "label_node_pools" {
-  depends_on = [local_sensitive_file.kubeconfig]
-
-  triggers = {
-    cluster_id = civo_kubernetes_cluster.k3s.id
-    pools_hash = sha256(jsonencode(var.node_pools))
-  }
-
-  provisioner "local-exec" {
-    command = <<-EOT
-      export KUBECONFIG="${pathexpand(var.kubeconfig_output_path)}"
-      for node in $(kubectl get nodes -o jsonpath='{.items[*].metadata.name}'); do
-        case "$node" in
-          *db-pool*)    kubectl label node "$node" workload-tier=database --overwrite ;;
-          *cache-pool*) kubectl label node "$node" workload-tier=cache --overwrite ;;
-          *app-pool*)   kubectl label node "$node" workload-tier=apps --overwrite ;;
-          *obs-pool*)   kubectl label node "$node" workload-tier=observability --overwrite ;;
-        esac
-      done
-    EOT
-  }
+  depends_on = [civo_kubernetes_node_pool.dedicated]
 }

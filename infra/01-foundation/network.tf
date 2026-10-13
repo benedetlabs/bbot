@@ -1,13 +1,13 @@
 # ============================================================================
-# ESCOPO: REDE & FIREWALL ZERO-TRUST (CIVO)
+# ESCOPO: REDE DEDICADA & FIREWALL ZERO-TRUST (CIVO)
 # ============================================================================
-data "civo_network" "default" {
-  label = "Default"
+resource "civo_network" "k3s" {
+  label = "${local.cluster_name}-net"
 }
 
 resource "civo_firewall" "k3s" {
   name                 = "${local.cluster_name}-fw"
-  network_id           = data.civo_network.default.id
+  network_id           = civo_network.k3s.id
   create_default_rules = false
 
   # Permite apenas acesso à API do Kubernetes (6443) para gerenciamento via Terraform/kubectl.
