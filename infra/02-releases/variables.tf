@@ -36,6 +36,7 @@ variable "projects" {
     image_tag      = string
     replicas       = optional(number, 2)
     signing_secret = optional(string, "")
+    bot_token      = optional(string, "")
   }))
 
   default = {
@@ -44,18 +45,21 @@ variable "projects" {
       image_tag      = "v1.0.0"
       replicas       = 2
       signing_secret = ""
+      bot_token      = ""
     }
     "queue-app" = {
       enabled        = false
       image_tag      = "v1.0.0"
       replicas       = 2
       signing_secret = ""
+      bot_token      = ""
     }
     "todo-app" = {
       enabled        = false
       image_tag      = "v1.0.0"
       replicas       = 2
       signing_secret = ""
+      bot_token      = ""
     }
   }
 }

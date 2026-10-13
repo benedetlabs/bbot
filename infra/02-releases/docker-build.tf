@@ -28,7 +28,8 @@ resource "terraform_data" "docker_build_push" {
   triggers_replace = [
     each.key,
     each.value.image_tag,
-    filesha256("${local.repo_root}/Dockerfile")
+    filesha256("${local.repo_root}/Dockerfile"),
+    filesha256("${local.repo_root}/apps/${each.key}/main.ts")
   ]
 
   provisioner "local-exec" {

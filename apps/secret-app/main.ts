@@ -120,14 +120,28 @@ app.post(
       }
       if (botToken) {
         try {
-          await slackApi.openView(botToken, triggerId, modalView);
+          const res = await slackApi.openView(botToken, triggerId, modalView);
+          if (!res.ok) {
+            console.error("Slack views.open returned error:", res.error);
+            return c.json({
+              response_type: "ephemeral",
+              text: `⚠️ Falha ao abrir o modal no Slack: \`${res.error ?? "unknown_error"}\``,
+            });
+          }
+          return c.body(null, 200);
         } catch (err) {
           console.error("Failed to open modal via views.open:", err);
         }
+      } else {
+        return c.json({
+          response_type: "ephemeral",
+          text:
+            "⚠️ *Configuração pendente:* Falta configurar o `bot_token` (`xoxb-...`) do app Secret no `terraform.tfvars` (em *OAuth & Permissions* -> *Bot User OAuth Token* no painel do Slack).",
+        });
       }
     }
 
-    // Return modal view for response and unit tests
+    // Return modal view for unit tests (when trigger_id is not provided)
     return c.json({
       response_action: "open",
       view: modalView,
@@ -483,6 +497,7 @@ app.post(
                 payload.trigger_id,
                 revealedModal,
               );
+              return c.body(null, 200);
             } catch (err) {
               console.error("Failed to call views.open on reveal:", err);
             }

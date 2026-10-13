@@ -8,21 +8,24 @@ openobserve_admin_email = "benedetlabs@gmail.com"
 projects = {
   "secret-app" = {
     enabled        = true
-    image_tag      = "v1.0.0"
+    image_tag      = "v1.0.1"
     replicas       = 2
     signing_secret = "SEU_SLACK_SECRET_SIGNING"
+    bot_token      = "xoxb-SEU_SLACK_SECRET_BOT_TOKEN"
   }
   "queue-app" = {
     enabled        = false # Desativado: não faz build nem cria pods no cluster até você mudar para true!
     image_tag      = "v1.0.0"
     replicas       = 2
     signing_secret = ""
+    bot_token      = ""
   }
   "todo-app" = {
     enabled        = false # Desativado: não faz build nem cria pods no cluster até você mudar para true!
     image_tag      = "v1.0.0"
     replicas       = 2
     signing_secret = ""
+    bot_token      = ""
   }
 }
 

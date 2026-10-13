@@ -39,6 +39,9 @@ resource "helm_release" "slack_suite" {
         secretAppSigningSecret   = try(var.projects["secret-app"].signing_secret, "")
         queueAppSigningSecret    = try(var.projects["queue-app"].signing_secret, "")
         todoAppSigningSecret     = try(var.projects["todo-app"].signing_secret, "")
+        secretAppBotToken        = try(var.projects["secret-app"].bot_token, "")
+        queueAppBotToken         = try(var.projects["queue-app"].bot_token, "")
+        todoAppBotToken          = try(var.projects["todo-app"].bot_token, "")
         cloudflareTunnelToken    = data.terraform_remote_state.foundation.outputs.cloudflare_tunnel_token
       }
     })
