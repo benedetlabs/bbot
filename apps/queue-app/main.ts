@@ -287,7 +287,18 @@ app.post(
           allowSecret: queue.allow_secret,
           adminUserIds: queue.admin_user_ids ?? [],
         });
-        await slackApi.openView(botToken, triggerId, modal);
+        const openRes = await slackApi.openView(botToken, triggerId, modal);
+        if (!openRes.ok) {
+          console.error(
+            "Failed to open queue config view via slash command:",
+            openRes,
+          );
+          return c.json({
+            response_type: "ephemeral",
+            text:
+              `⚠️ Erro ao abrir configurações: ${openRes.error ?? "desconhecido"}.`,
+          });
+        }
         return c.json({
           response_type: "ephemeral",
           text: `⚙️ Painel de configuração da fila aberto.`,
@@ -841,7 +852,23 @@ app.post(
             allowSecret: queue.allow_secret,
             adminUserIds: queue.admin_user_ids ?? [],
           });
-          await slackApi.openView(botToken, triggerId, modalView);
+          const openRes = await slackApi.openView(
+            botToken,
+            triggerId,
+            modalView,
+          );
+          if (!openRes.ok) {
+            console.error(
+              "Failed to open queue config view via button click:",
+              openRes,
+            );
+            if (channelId) {
+              await slackApi.postEphemeral(botToken, channelId, userId, {
+                text:
+                  `⚠️ Erro ao abrir configurações: ${openRes.error ?? "desconhecido"}.`,
+              });
+            }
+          }
         }
         return c.text("OK");
       }

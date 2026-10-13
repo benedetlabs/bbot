@@ -764,6 +764,32 @@ export function buildQueueConfigModal(params: {
   allowSecret: boolean;
   adminUserIds: string[];
 }): SlackModalView {
+  const concurrencyOptions = [
+    { text: { type: "plain_text" as const, text: "1 vaga (Mutex exclusivo)" }, value: "1" },
+    { text: { type: "plain_text" as const, text: "2 vagas simultâneas" }, value: "2" },
+    { text: { type: "plain_text" as const, text: "3 vagas simultâneas" }, value: "3" },
+    { text: { type: "plain_text" as const, text: "4 vagas simultâneas" }, value: "4" },
+    { text: { type: "plain_text" as const, text: "5 vagas simultâneas" }, value: "5" },
+  ];
+  const initialConcurrencyOption =
+    concurrencyOptions.find((o) => o.value === String(params.maxConcurrency)) ??
+    concurrencyOptions[0];
+
+  const holdOptions = [
+    { text: { type: "plain_text" as const, text: "15 minutos" }, value: "15" },
+    { text: { type: "plain_text" as const, text: "30 minutos" }, value: "30" },
+    { text: { type: "plain_text" as const, text: "45 minutos" }, value: "45" },
+    { text: { type: "plain_text" as const, text: "60 minutos (1 hora)" }, value: "60" },
+    { text: { type: "plain_text" as const, text: "120 minutos (2 horas)" }, value: "120" },
+  ];
+  const initialHoldOption =
+    holdOptions.find((o) => o.value === String(params.maxHoldMinutes)) ??
+    holdOptions[2]; // Default 45m
+
+  const validAdminUserIds = params.adminUserIds.filter(
+    (id) => typeof id === "string" && id.trim().length > 0 && !id.startsWith("B"),
+  );
+
   return {
     type: "modal",
     callback_id: "queue_config_modal",
@@ -803,20 +829,8 @@ export function buildQueueConfigModal(params: {
             type: "plain_text",
             text: "Selecione a concorrência",
           },
-          initial_option: {
-            text: {
-              type: "plain_text",
-              text: `${params.maxConcurrency} vaga${params.maxConcurrency > 1 ? "s" : ""} simultânea${params.maxConcurrency > 1 ? "s" : ""}`,
-            },
-            value: String(params.maxConcurrency),
-          },
-          options: [
-            { text: { type: "plain_text", text: "1 vaga (Mutex exclusivo)" }, value: "1" },
-            { text: { type: "plain_text", text: "2 vagas simultâneas" }, value: "2" },
-            { text: { type: "plain_text", text: "3 vagas simultâneas" }, value: "3" },
-            { text: { type: "plain_text", text: "4 vagas simultâneas" }, value: "4" },
-            { text: { type: "plain_text", text: "5 vagas simultâneas" }, value: "5" },
-          ],
+          initial_option: initialConcurrencyOption,
+          options: concurrencyOptions,
         },
         label: {
           type: "plain_text",
@@ -834,20 +848,8 @@ export function buildQueueConfigModal(params: {
             type: "plain_text",
             text: "Selecione o tempo máximo",
           },
-          initial_option: {
-            text: {
-              type: "plain_text",
-              text: `${params.maxHoldMinutes} minutos`,
-            },
-            value: String(params.maxHoldMinutes),
-          },
-          options: [
-            { text: { type: "plain_text", text: "15 minutos" }, value: "15" },
-            { text: { type: "plain_text", text: "30 minutos" }, value: "30" },
-            { text: { type: "plain_text", text: "45 minutos" }, value: "45" },
-            { text: { type: "plain_text", text: "60 minutos (1 hora)" }, value: "60" },
-            { text: { type: "plain_text", text: "120 minutos (2 horas)" }, value: "120" },
-          ],
+          initial_option: initialHoldOption,
+          options: holdOptions,
         },
         label: {
           type: "plain_text",
@@ -904,8 +906,8 @@ export function buildQueueConfigModal(params: {
             type: "plain_text",
             text: "Selecione administradores da fila",
           },
-          ...(params.adminUserIds.length > 0
-            ? { initial_users: params.adminUserIds }
+          ...(validAdminUserIds.length > 0
+            ? { initial_users: validAdminUserIds }
             : {}),
         },
         label: {

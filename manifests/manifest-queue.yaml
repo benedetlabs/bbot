@@ -12,7 +12,7 @@ features:
     - command: "/queue"
       url: "https://queue.bsuit.app/slack/commands"
       description: "Manage channel deployment queues and resource locks"
-      usage_hint: "[join | done | extend | kick | status | help]"
+      usage_hint: "[join | done | extend | kick | config | remove | bump | help]"
       should_escape: false
 
 oauth_config:

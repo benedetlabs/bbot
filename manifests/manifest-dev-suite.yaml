@@ -22,7 +22,7 @@ features:
     - command: "/queue"
       url: "https://queue.bsuit.app/slack/commands"
       description: "Manage channel deployment queue"
-      usage_hint: "[join | done | extend | kick | status]"
+      usage_hint: "[join | done | extend | kick | config | remove | bump | help]"
       should_escape: false
     - command: "/todo"
       url: "https://todo.bsuit.app/slack/commands"
