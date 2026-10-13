@@ -56,6 +56,24 @@ export function createKVStore(getSql: () => Sql) {
     },
 
     /**
+     * Updates an existing key's value while strictly PRESERVING its original expires_at TTL.
+     */
+    async updateValue<T extends Record<string, unknown>>(
+      key: string,
+      value: T,
+      customSql?: Sql,
+    ): Promise<boolean> {
+      const sql = customSql ?? getSql();
+      const result = await sql`
+        UPDATE kv_store
+        SET value = ${sql.json(value as unknown as Parameters<typeof sql.json>[0])},
+            updated_at = NOW()
+        WHERE key = ${key} AND expires_at > NOW()
+      `;
+      return result.count > 0;
+    },
+
+    /**
      * Reads a value by key. Enforces expiration check instantly in the query.
      */
     async get<T>(key: string, customSql?: Sql): Promise<T | null> {

@@ -50,7 +50,7 @@ Deno.test("outbox-worker: processes secret.post_active_card and records messageT
   let kvUpdated = false;
   const origPost = slackApi.postMessage;
   const origKvGet = kv.get;
-  const origKvSet = kv.set;
+  const origKvUpdateValue = kv.updateValue;
 
   slackApi.postMessage = ((token, channelId) => {
     postCalled = true;
@@ -75,11 +75,11 @@ Deno.test("outbox-worker: processes secret.post_active_card and records messageT
     return Promise.resolve(null);
   }) as typeof kv.get;
 
-  kv.set = ((_key: string, val: Record<string, unknown>) => {
+  kv.updateValue = ((_key: string, val: Record<string, unknown>) => {
     assertEquals(val["messageTs"], "1700000000.999999");
     kvUpdated = true;
-    return Promise.resolve();
-  }) as typeof kv.set;
+    return Promise.resolve(true);
+  }) as typeof kv.updateValue;
 
   const origEnv = Deno.env.get("SECRET_APP_BOT_TOKEN");
   Deno.env.set("SECRET_APP_BOT_TOKEN", "xoxb-test-worker-token");
@@ -106,7 +106,7 @@ Deno.test("outbox-worker: processes secret.post_active_card and records messageT
   } finally {
     slackApi.postMessage = origPost;
     kv.get = origKvGet;
-    kv.set = origKvSet;
+    kv.updateValue = origKvUpdateValue;
     if (origEnv !== undefined) Deno.env.set("SECRET_APP_BOT_TOKEN", origEnv);
     else Deno.env.delete("SECRET_APP_BOT_TOKEN");
   }

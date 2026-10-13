@@ -138,10 +138,9 @@ export async function processOutboxEvent(
               const stored = await kv.get<SecretKVPayload>(secretId);
               if (stored) {
                 stored.messageTs = res.ts;
-                await kv.set(
+                await kv.updateValue(
                   secretId,
                   stored as unknown as Record<string, unknown>,
-                  3600,
                 );
               }
             } catch (kvErr) {
