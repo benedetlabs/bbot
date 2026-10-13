@@ -13,7 +13,7 @@ output "cluster_name" {
 
 output "kubeconfig_raw" {
   description = "Conteúdo bruto do kubeconfig (usado pela camada 02-releases via remote_state)"
-  value       = civo_kubernetes_cluster.k3s.kubeconfig
+  value       = data.civo_kubernetes_cluster.ready.kubeconfig
   sensitive   = true
 }
 

@@ -24,7 +24,7 @@ secrets:
   queueAppSigningSecret: "CHANGE_ME_QUEUE_SIGNING"
   todoAppSigningSecret: "CHANGE_ME_TODO_SIGNING"
   cloudflareTunnelToken: ""
-  # Credenciais de Admin do OpenObserve (https://observe.seudominio.com)
+  # Credenciais de Admin do OpenObserve (https://observe.bsuit.app)
   openobserveAdminEmail: "benedetlabs@gmail.com"
   openobserveAdminPassword: "CHANGE_ME_OPENOBSERVE_PASSWORD"
 
@@ -35,7 +35,7 @@ postgres:
   enabled: true
   image: "postgres:18-alpine"
   nodeSelector:
-    workload-tier: "database"
+    kubernetes.civo.com/civo-node-pool: "db-pool"
   storageClassName: "civo-volume-retain"
   storageSize: "50Gi"
   # Tuning dedicado para máquina de 8 GB RAM:
@@ -65,7 +65,7 @@ pgcache:
   enabled: true
   image: "pgcache/pgcache:latest"
   nodeSelector:
-    workload-tier: "cache"
+    kubernetes.civo.com/civo-node-pool: "cache-pool"
   publicationName: "pgcache_suite_pub"
   slotName: "pgcache_suite_slot"
   resources:
@@ -82,7 +82,7 @@ pgcache:
 apps:
   replicas: 2
   nodeSelector:
-    workload-tier: "apps"
+    kubernetes.civo.com/civo-node-pool: "app-pool"
   otelEnabled: true
   resources:
     requests:
@@ -100,7 +100,7 @@ worker:
   enabled: true
   replicas: 2
   nodeSelector:
-    workload-tier: "apps"
+    kubernetes.civo.com/civo-node-pool: "app-pool"
   otelEnabled: true
   pollIntervalMs: "250"
   batchSize: "25"
@@ -116,7 +116,7 @@ cloudflared:
   enabled: true
   replicas: 2
   nodeSelector:
-    workload-tier: "apps"
+    kubernetes.civo.com/civo-node-pool: "app-pool"
   image: "cloudflare/cloudflared:latest"
   resources:
     requests:
@@ -134,7 +134,7 @@ openobserve:
   enabled: true
   image: "public.ecr.aws/zinclabs/openobserve:latest"
   nodeSelector:
-    workload-tier: "observability"
+    kubernetes.civo.com/civo-node-pool: "obs-pool"
   storageClassName: "civo-volume-retain"
   storageSize: "30Gi"
   resources:

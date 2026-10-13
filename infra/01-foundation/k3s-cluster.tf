@@ -32,11 +32,15 @@ resource "civo_kubernetes_node_pool" "dedicated" {
   }
 }
 
+# Consulta o cluster após todos os pools estarem ativos para garantir que o kubeconfig venha preenchido
+data "civo_kubernetes_cluster" "ready" {
+  name       = civo_kubernetes_cluster.k3s.name
+  depends_on = [civo_kubernetes_node_pool.dedicated]
+}
+
 # Exporta o kubeconfig para a máquina local (Mac)
 resource "local_sensitive_file" "kubeconfig" {
-  content         = civo_kubernetes_cluster.k3s.kubeconfig
+  content         = data.civo_kubernetes_cluster.ready.kubeconfig
   filename        = pathexpand(var.kubeconfig_output_path)
   file_permission = "0600"
-
-  depends_on = [civo_kubernetes_node_pool.dedicated]
 }
