@@ -1,5 +1,5 @@
 # ============================================================================
-# ESCOPO: VARIÁVEIS DE RELEASE & APLICAÇÃO (02-RELEASES)
+# ESCOPO: VARIÁVEIS DE RELEASE POR PROJETO (02-RELEASES)
 # ============================================================================
 variable "github_username" {
   description = "Usuário ou organização do GitHub para o Container Registry (ghcr.io)"
@@ -8,32 +8,15 @@ variable "github_username" {
 }
 
 variable "github_token" {
-  description = "Personal Access Token do GitHub (read:packages) para puxar imagens privadas"
+  description = "Personal Access Token do GitHub (write:packages e read:packages) para build/push e pull no K8s"
   type        = string
   sensitive   = true
 }
 
-variable "image_tag" {
-  description = "Tag da versão das imagens Docker (ex: v1.0.0, v1.0.1)"
-  type        = string
-  default     = "v1.0.0"
-
-  validation {
-    condition     = length(trimspace(var.image_tag)) > 0
-    error_message = "A image_tag não pode ser vazia."
-  }
-}
-
-variable "app_replicas" {
-  description = "Quantidade de réplicas para cada bot (secret-app, queue-app, todo-app)"
-  type        = number
-  default     = 2
-}
-
-variable "worker_replicas" {
-  description = "Quantidade de réplicas para o outbox-worker"
-  type        = number
-  default     = 2
+variable "auto_build_images" {
+  description = "Se true, o próprio Terraform faz o docker buildx (linux/amd64) e push no GHCR apenas dos projetos habilitados!"
+  type        = bool
+  default     = true
 }
 
 variable "openobserve_admin_email" {
@@ -42,20 +25,52 @@ variable "openobserve_admin_email" {
   default     = "benedetlabs@gmail.com"
 }
 
-variable "secret_app_signing_secret" {
-  description = "Slack Signing Secret do Secret App"
-  type        = string
-  sensitive   = true
+# ============================================================================
+# CONFIGURAÇÃO INDIVIDUAL POR PROJETO (secret-app, queue-app, todo-app)
+# Permite fazer deploy de apenas 1 projeto (enabled = true/false) e versionar tags separadas!
+# ============================================================================
+variable "projects" {
+  description = "Mapa de configuração independente por app do monorepo"
+  type = map(object({
+    enabled        = bool
+    image_tag      = string
+    replicas       = optional(number, 2)
+    signing_secret = optional(string, "")
+  }))
+
+  default = {
+    "secret-app" = {
+      enabled        = true
+      image_tag      = "v1.0.0"
+      replicas       = 2
+      signing_secret = ""
+    }
+    "queue-app" = {
+      enabled        = false
+      image_tag      = "v1.0.0"
+      replicas       = 2
+      signing_secret = ""
+    }
+    "todo-app" = {
+      enabled        = false
+      image_tag      = "v1.0.0"
+      replicas       = 2
+      signing_secret = ""
+    }
+  }
 }
 
-variable "queue_app_signing_secret" {
-  description = "Slack Signing Secret do Queue App"
-  type        = string
-  sensitive   = true
-}
+variable "worker" {
+  description = "Configuração independente do Transactional Outbox Worker"
+  type = object({
+    enabled   = bool
+    image_tag = string
+    replicas  = optional(number, 2)
+  })
 
-variable "todo_app_signing_secret" {
-  description = "Slack Signing Secret do Todo App"
-  type        = string
-  sensitive   = true
+  default = {
+    enabled   = true
+    image_tag = "v1.0.0"
+    replicas  = 2
+  }
 }

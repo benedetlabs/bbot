@@ -31,7 +31,7 @@ spec:
         runAsGroup: 65532
       containers:
         - name: outbox-worker
-          image: "{{ .Values.global.imageRegistry }}/outbox-worker:{{ .Values.global.imageTag }}"
+          image: "{{ .Values.global.imageRegistry }}/outbox-worker:{{ .Values.worker.imageTag }}"
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           envFrom:
             - secretRef:

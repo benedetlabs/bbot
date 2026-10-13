@@ -1,22 +1,23 @@
-{{- range .Values.apps.items }}
+{{- range $appName, $appConfig := .Values.apps.projects }}
+{{- if $appConfig.enabled }}
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ .name }}
+  name: {{ $appName }}
   namespace: {{ $.Release.Namespace }}
   labels:
-    app: {{ .name }}
+    app: {{ $appName }}
     app.kubernetes.io/part-of: slack-suite
 spec:
-  replicas: {{ $.Values.apps.replicas }}
+  replicas: {{ $appConfig.replicas | default 2 }}
   selector:
     matchLabels:
-      app: {{ .name }}
+      app: {{ $appName }}
   template:
     metadata:
       labels:
-        app: {{ .name }}
+        app: {{ $appName }}
     spec:
       {{- if $.Values.apps.nodeSelector }}
       nodeSelector:
@@ -31,8 +32,8 @@ spec:
         runAsUser: 65532
         runAsGroup: 65532
       containers:
-        - name: {{ .name }}
-          image: "{{ $.Values.global.imageRegistry }}/{{ .name }}:{{ $.Values.global.imageTag }}"
+        - name: {{ $appName }}
+          image: "{{ $.Values.global.imageRegistry }}/{{ $appName }}:{{ $appConfig.imageTag }}"
           imagePullPolicy: {{ $.Values.global.imagePullPolicy }}
           ports:
             - containerPort: 8080
@@ -45,7 +46,7 @@ spec:
             - name: OTEL_DENO
               value: "true"
             - name: OTEL_SERVICE_NAME
-              value: {{ .name | quote }}
+              value: {{ $appName | quote }}
             - name: OTEL_EXPORTER_OTLP_PROTOCOL
               value: "http/protobuf"
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
@@ -74,14 +75,15 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ .name }}-svc
+  name: {{ $appName }}-svc
   namespace: {{ $.Release.Namespace }}
 spec:
   type: ClusterIP
   selector:
-    app: {{ .name }}
+    app: {{ $appName }}
   ports:
     - name: http
       port: 80
       targetPort: 8080
+{{- end }}
 {{- end }}

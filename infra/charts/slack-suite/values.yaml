@@ -1,10 +1,9 @@
 # ============================================================================
-# Valores do Helm Chart: slack-suite (4 Node Pools + Disco Retain + OpenObserve)
+# Valores do Helm Chart: slack-suite (Por Projeto Independente + 4 Node Pools)
 # ============================================================================
 
 global:
   imageRegistry: "ghcr.io/benedetlabs"
-  imageTag: "v1.0.0"
   imagePullPolicy: IfNotPresent
   imagePullSecretName: "ghcr-secret"
 
@@ -14,17 +13,16 @@ storageClass:
   name: "civo-volume-retain"
   provisioner: "csi.civo.com"
 
-# Credenciais e chaves (sobrescreva via --set ou values-prod.yaml)
+# Credenciais e chaves
 secrets:
   postgresUser: "suite_user"
   postgresPassword: "CHANGE_ME_STRONG_PASSWORD"
   postgresDb: "slack_suite"
   masterEncryptionKeyHex: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-  secretAppSigningSecret: "CHANGE_ME_SECRET_SIGNING"
-  queueAppSigningSecret: "CHANGE_ME_QUEUE_SIGNING"
-  todoAppSigningSecret: "CHANGE_ME_TODO_SIGNING"
+  secretAppSigningSecret: ""
+  queueAppSigningSecret: ""
+  todoAppSigningSecret: ""
   cloudflareTunnelToken: ""
-  # Credenciais de Admin do OpenObserve (https://observe.bsuit.app)
   openobserveAdminEmail: "benedetlabs@gmail.com"
   openobserveAdminPassword: "CHANGE_ME_OPENOBSERVE_PASSWORD"
 
@@ -38,7 +36,6 @@ postgres:
     kubernetes.civo.com/civo-node-pool: "db-pool"
   storageClassName: "civo-volume-retain"
   storageSize: "50Gi"
-  # Tuning dedicado para máquina de 8 GB RAM:
   sharedBuffers: "2GB"
   effectiveCacheSize: "6GB"
   workMem: "16MB"
@@ -51,7 +48,6 @@ postgres:
     limits:
       cpu: "3500m"
       memory: "6Gi"
-  # Backup automático a cada 6 horas em volume SSD separado (Retain)
   backup:
     enabled: true
     schedule: "0 */6 * * *"
@@ -77,10 +73,10 @@ pgcache:
       memory: "3Gi"
 
 # ============================================================================
-# POOL 3: APLICAÇÕES DENO + WORKER + TUNNEL (app-pool: g4s.kube.medium - 4 vCPU, 8 GB RAM)
+# POOL 3: APLICAÇÕES DENO POR PROJETO + WORKER + TUNNEL (app-pool)
+# Cada app tem seu próprio `enabled`, `imageTag` e `replicas` independentes!
 # ============================================================================
 apps:
-  replicas: 2
   nodeSelector:
     kubernetes.civo.com/civo-node-pool: "app-pool"
   otelEnabled: true
@@ -91,13 +87,23 @@ apps:
     limits:
       cpu: "500m"
       memory: "256Mi"
-  items:
-    - name: secret-app
-    - name: queue-app
-    - name: todo-app
+  projects:
+    secret-app:
+      enabled: true
+      imageTag: "v1.0.0"
+      replicas: 2
+    queue-app:
+      enabled: true
+      imageTag: "v1.0.0"
+      replicas: 2
+    todo-app:
+      enabled: true
+      imageTag: "v1.0.0"
+      replicas: 2
 
 worker:
   enabled: true
+  imageTag: "v1.0.0"
   replicas: 2
   nodeSelector:
     kubernetes.civo.com/civo-node-pool: "app-pool"
@@ -128,7 +134,6 @@ cloudflared:
 
 # ============================================================================
 # POOL 4: OBSERVABILIDADE COMPLETA (obs-pool: g4s.kube.medium - 4 vCPU, 8 GB RAM)
-# OpenObserve (Logs, Métricas, Traces OTLP) + OpenTelemetry Collector DaemonSet
 # ============================================================================
 openobserve:
   enabled: true
@@ -148,6 +153,5 @@ openobserve:
     enabled: true
     image: "otel/opentelemetry-collector-contrib:latest"
 
-# Blindagem Leste-Oeste (NetworkPolicy para o PostgreSQL 18)
 networkPolicy:
   enabled: true

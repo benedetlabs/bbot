@@ -16,19 +16,45 @@ resource "helm_release" "slack_suite" {
     value = "ghcr.io/${var.github_username}"
   }
 
+  # Configura individualmente cada projeto (enabled, imageTag e replicas)
+  dynamic "set" {
+    for_each = var.projects
+    content {
+      name  = "apps.projects.${set.key}.enabled"
+      value = tostring(set.value.enabled)
+    }
+  }
+
+  dynamic "set" {
+    for_each = var.projects
+    content {
+      name  = "apps.projects.${set.key}.imageTag"
+      value = set.value.image_tag
+    }
+  }
+
+  dynamic "set" {
+    for_each = var.projects
+    content {
+      name  = "apps.projects.${set.key}.replicas"
+      value = tostring(set.value.replicas)
+    }
+  }
+
+  # Configura individualmente o Outbox Worker
   set {
-    name  = "global.imageTag"
-    value = var.image_tag
+    name  = "worker.enabled"
+    value = tostring(var.worker.enabled)
   }
 
   set {
-    name  = "apps.replicas"
-    value = tostring(var.app_replicas)
+    name  = "worker.imageTag"
+    value = var.worker.image_tag
   }
 
   set {
     name  = "worker.replicas"
-    value = tostring(var.worker_replicas)
+    value = tostring(var.worker.replicas)
   }
 
   set {
@@ -53,17 +79,17 @@ resource "helm_release" "slack_suite" {
 
   set_sensitive {
     name  = "secrets.secretAppSigningSecret"
-    value = var.secret_app_signing_secret
+    value = try(var.projects["secret-app"].signing_secret, "")
   }
 
   set_sensitive {
     name  = "secrets.queueAppSigningSecret"
-    value = var.queue_app_signing_secret
+    value = try(var.projects["queue-app"].signing_secret, "")
   }
 
   set_sensitive {
     name  = "secrets.todoAppSigningSecret"
-    value = var.todo_app_signing_secret
+    value = try(var.projects["todo-app"].signing_secret, "")
   }
 
   # Token recuperado automaticamente do state da camada 01-foundation
@@ -74,6 +100,7 @@ resource "helm_release" "slack_suite" {
 
   depends_on = [
     kubernetes_namespace.slack_suite,
-    kubernetes_secret.ghcr_secret
+    kubernetes_secret.ghcr_secret,
+    terraform_data.docker_build_push
   ]
 }

@@ -1,12 +1,33 @@
 # Copie para infra/02-releases/terraform.tfvars (nunca comite no Git!)
-github_username           = "benedetlabs"
-github_token              = "ghp_SEU_GITHUB_TOKEN_READ_PACKAGES"
-image_tag                 = "v1.0.0"
+github_username         = "benedetlabs"
+github_token            = "ghp_SEU_GITHUB_TOKEN_WRITE_E_READ_PACKAGES"
+auto_build_images       = true
+openobserve_admin_email = "benedetlabs@gmail.com"
 
-app_replicas              = 2
-worker_replicas           = 2
+# Você pode ativar apenas 1 projeto (enabled = true) ou todos, e cada um tem sua própria image_tag!
+projects = {
+  "secret-app" = {
+    enabled        = true
+    image_tag      = "v1.0.0"
+    replicas       = 2
+    signing_secret = "SEU_SLACK_SECRET_SIGNING"
+  }
+  "queue-app" = {
+    enabled        = false # Desativado: não faz build nem cria pods no cluster até você mudar para true!
+    image_tag      = "v1.0.0"
+    replicas       = 2
+    signing_secret = ""
+  }
+  "todo-app" = {
+    enabled        = false # Desativado: não faz build nem cria pods no cluster até você mudar para true!
+    image_tag      = "v1.0.0"
+    replicas       = 2
+    signing_secret = ""
+  }
+}
 
-openobserve_admin_email   = "benedetlabs@gmail.com"
-secret_app_signing_secret = "SEU_SLACK_SECRET_SIGNING"
-queue_app_signing_secret  = "SEU_SLACK_QUEUE_SIGNING"
-todo_app_signing_secret   = "SEU_SLACK_TODO_SIGNING"
+worker = {
+  enabled   = true
+  image_tag = "v1.0.0"
+  replicas  = 2
+}

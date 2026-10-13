@@ -2,13 +2,20 @@
 # ESCOPO: OUTPUTS DE RELEASE & CREDENCIAIS GERADAS
 # ============================================================================
 output "helm_release_info" {
-  description = "Metadados do release Helm gerenciado pelo Terraform"
+  description = "Metadados do release Helm e status individual de cada projeto"
   value = {
     name      = helm_release.slack_suite.name
     namespace = helm_release.slack_suite.namespace
     status    = helm_release.slack_suite.status
     version   = helm_release.slack_suite.version
-    image_tag = var.image_tag
+    deployed_projects = {
+      for k, v in var.projects : k => {
+        enabled   = v.enabled
+        image_tag = v.image_tag
+        replicas  = v.replicas
+      }
+    }
+    worker = var.worker
   }
 }
 
