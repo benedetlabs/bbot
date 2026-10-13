@@ -2,7 +2,7 @@ display_information:
   name: "Todo"
   description: "Capture conversational tasks and manage GTD to-dos without leaving Slack."
   background_color: "#1D4ED8"
-  long_description: "Turn message requests into actionable tasks with 1-click message shortcuts. Track deadlines in your personal App Home with natural language date parsing."
+  long_description: "Turn message requests into actionable tasks with 1-click message shortcuts. Track deadlines, organize your personal GTD inbox in your Slack App Home, and schedule reminders with natural language date parsing."
 
 features:
   bot_user:

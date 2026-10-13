@@ -2,7 +2,7 @@ display_information:
   name: "Queue"
   description: "Manage staging deploy queues, environment locks, and concurrency with live status cards."
   background_color: "#166534"
-  long_description: "Eliminate deploy collisions and noisy channel chatter. Lock shared environments with fair FIFO queues, live elapsed timers, automatic handoff, and 5-minute timeout warnings."
+  long_description: "Eliminate deploy collisions and noisy channel chatter. Lock shared staging environments with fair FIFO queues, live interactive status cards, automatic handoffs, and 5-minute timeout warnings for maximum team productivity."
 
 features:
   bot_user:
