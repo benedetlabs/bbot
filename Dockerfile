@@ -10,7 +10,7 @@ WORKDIR /workspace
 # 1. Copy dependency and workspace manifests
 COPY deno.json deno.lock* .npmrc ./
 COPY packages/ ./packages/
-COPY apps/${APP_NAME}/ ./apps/${APP_NAME}/
+COPY apps/ ./apps/
 
 # 2. Compile standalone native executable with built-in OpenTelemetry support
 RUN deno compile \
