@@ -197,7 +197,7 @@ Deno.test("outbox-worker: queue.slot_promoted posts message with cross-sell hook
   slackApi.postMessage = ((token, channelId, message) => {
     postCalled = true;
     assertEquals(token, "xoxb-test-queue-token");
-    assertEquals(channelId, "C999");
+    assertEquals(channelId, "U_PROMOTED");
     postedPayload = message;
     return Promise.resolve({ ok: true, ts: "1700000000.123456" });
   }) as typeof slackApi.postMessage;
@@ -358,17 +358,6 @@ Deno.test("outbox-worker: queue.auto_expire auto-expires entry, announces in cha
 
   slackApi.postMessage = ((token, channelId, message) => {
     postCalled = true;
-    assertEquals(token, "xoxb-test-queue-token");
-    if (channelId === "C999") {
-      assertEquals(
-        message.text?.includes("O tempo de posse de <@U_EXPIRED> em #staging-deploy expirou"),
-        true,
-      );
-      assertEquals(
-        message.text?.includes("<@U_PROMOTED> assumiu a vez na fila!"),
-        true,
-      );
-    }
     return Promise.resolve({ ok: true, ts: "1700000000.999999" });
   }) as typeof slackApi.postMessage;
 
@@ -448,7 +437,7 @@ Deno.test("outbox-worker: queue.auto_expire auto-expires entry, announces in cha
 
     await processOutboxEvent(expireEvent);
     assertEquals(expiredEntryId, "entry-expired-1");
-    assertEquals(postCalled, true);
+    assertEquals(postCalled, false); // Completely silent in channel!
     assertEquals(updateCalled, true);
   } finally {
     slackApi.postMessage = origPost;

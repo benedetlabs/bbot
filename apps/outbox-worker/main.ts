@@ -199,20 +199,14 @@ export async function processOutboxEvent(
             maxHoldMinutes: maxHoldMinutes ?? 45,
             allowSecret,
           });
-          const res = await slackApi.postMessage(botToken, channelId, promoMsg);
-          if (!res.ok) {
-            throw new Error(
-              `Slack chat.postMessage failed: ${res.error ?? "unknown error"}`,
-            );
-          }
 
-          // Direct DM alert to notify top-of-queue immediately
-          try {
-            await slackApi.postMessage(botToken, newHolderUserId, {
-              text: `🚀 Você assumiu o topo da fila em <#${channelId}>! Seu acesso está liberado.`,
-            });
-          } catch {
-            // Non-fatal
+          // Direct DM alert with interactive action buttons to notify top-of-queue
+          const res = await slackApi.postMessage(botToken, newHolderUserId, promoMsg);
+          if (!res.ok) {
+            console.warn(
+              `[${WORKER_ID}] Failed to send promotion DM to ${newHolderUserId}:`,
+              res.error,
+            );
           }
 
           if (queueId) {
@@ -364,26 +358,7 @@ export async function processOutboxEvent(
         if (expireRes.status === "expired" && channelId) {
           const botToken = await resolveBotToken(event.workspace_id, "queue");
           if (botToken) {
-            // Only post public message in channel if there is a next person waiting in line
-            if (expireRes.promotedEntry) {
-              await slackApi.postMessage(botToken, channelId, {
-                response_type: "in_channel",
-                text:
-                  `⌛ O tempo de posse de <@${holderUserId}> em #${channelName ?? "queue"} expirou. 🚀 <@${expireRes.promotedEntry.slack_user_id}> assumiu a vez na fila!`,
-              });
-
-              // Direct DM alert to the newly promoted user
-              slackApi.postMessage(
-                botToken,
-                expireRes.promotedEntry.slack_user_id,
-                {
-                  text:
-                    `🚀 Você assumiu o topo da fila em <#${channelId}>! Seu acesso está liberado.`,
-                },
-              ).catch(() => {});
-            }
-
-            // Update in-place live sticky queue card
+            // Update in-place live sticky queue card silently
             try {
               await syncStickyQueueCard({
                 queueId,

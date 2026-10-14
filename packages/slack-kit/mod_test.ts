@@ -3,8 +3,11 @@ import {
   buildQueueCard,
   buildQueueConfigModal,
   buildQueueDeleteConfirmModal,
+  buildQueueHomeView,
   buildQueuePromotionMessage,
+  buildQueueStatsModal,
   buildQueueTimeoutWarningMessage,
+  buildQueueUserActionsEphemeral,
   buildSecretActiveCard,
   buildSecretBurnedCard,
   buildSecretModal,
@@ -198,20 +201,16 @@ Deno.test("slack-kit: queue and todo card builders", () => {
   });
   assertEquals(queueCard.blocks.length, 4);
 
-  // Check action buttons in queue card (by default allowSecret is false -> no secret button)
+  // Public queue card now has exactly 2 clean buttons: Join Queue and My Actions
   const queueActions = queueCard.blocks[3] as {
     type: string;
     elements: { action_id: string }[];
   };
-  assertEquals(queueActions.elements.length, 4); // join, done, extend, config
-  assertEquals(
-    queueActions.elements.some((e) =>
-      e.action_id === "queue_attach_secret_click"
-    ),
-    false,
-  );
+  assertEquals(queueActions.elements.length, 2);
+  assertEquals(queueActions.elements[0].action_id, "queue_join_click");
+  assertEquals(queueActions.elements[1].action_id, "queue_my_actions_click");
 
-  // When allowSecret is true -> secret button appears
+  // Even with allowSecret=true, public card stays clean with 2 buttons (secret button is in ephemeral actions)
   const queueCardWithSecret = buildQueueCard({
     channelName: "deploy-prod",
     queueId: "q-123",
@@ -224,11 +223,78 @@ Deno.test("slack-kit: queue and todo card builders", () => {
     type: string;
     elements: { action_id: string }[];
   };
-  assertEquals(queueActionsWithSecret.elements.length, 5);
+  assertEquals(queueActionsWithSecret.elements.length, 2);
+
+  // Ephemeral user actions test: active holder with admin and secret enabled
+  const activeUserActions = buildQueueUserActionsEphemeral({
+    channelName: "deploy-prod",
+    queueId: "q-123",
+    userId: "U10",
+    userStatus: "active",
+    isAdmin: true,
+    expiresInMinutes: 35,
+    allowSecret: true,
+  });
+  assertEquals(activeUserActions.response_type, "ephemeral");
+  const activeActionsBlock = activeUserActions.blocks[1] as {
+    type: string;
+    elements: { action_id: string }[];
+  };
   assertEquals(
-    queueActionsWithSecret.elements.some((e) =>
-      e.action_id === "queue_attach_secret_click"
-    ),
+    activeActionsBlock.elements.some((e) => e.action_id === "queue_done_click"),
+    true,
+  );
+  assertEquals(
+    activeActionsBlock.elements.some((e) => e.action_id === "queue_extend_click"),
+    true,
+  );
+  assertEquals(
+    activeActionsBlock.elements.some((e) => e.action_id === "queue_attach_secret_click"),
+    true,
+  );
+  assertEquals(
+    activeActionsBlock.elements.some((e) => e.action_id === "queue_config_click"),
+    true,
+  );
+  assertEquals(
+    activeActionsBlock.elements.some((e) => e.action_id === "queue_stats_click"),
+    true,
+  );
+
+  // Ephemeral user actions test: waiting teammate
+  const waitingUserActions = buildQueueUserActionsEphemeral({
+    channelName: "deploy-prod",
+    queueId: "q-123",
+    userId: "U20",
+    userStatus: "waiting",
+    isAdmin: false,
+    waitingPosition: 1,
+    waitingMinutes: 5,
+  });
+  assertEquals(waitingUserActions.response_type, "ephemeral");
+  const waitingActionsBlock = waitingUserActions.blocks[1] as {
+    type: string;
+    elements: { action_id: string }[];
+  };
+  assertEquals(
+    waitingActionsBlock.elements.some((e) => e.action_id === "queue_done_click"),
+    true,
+  );
+
+  // Ephemeral user actions test: bystander (not in queue)
+  const noneUserActions = buildQueueUserActionsEphemeral({
+    channelName: "deploy-prod",
+    queueId: "q-123",
+    userId: "U99",
+    userStatus: "none",
+    isAdmin: false,
+  });
+  const noneActionsBlock = noneUserActions.blocks[1] as {
+    type: string;
+    elements: { action_id: string }[];
+  };
+  assertEquals(
+    noneActionsBlock.elements.some((e) => e.action_id === "queue_join_click"),
     true,
   );
 
@@ -239,7 +305,7 @@ Deno.test("slack-kit: queue and todo card builders", () => {
     previousHolderUserId: "U10",
     maxHoldMinutes: 45,
   });
-  assertEquals(promoMsg.response_type, "in_channel");
+  assertEquals(promoMsg.response_type, "ephemeral");
   assertEquals(promoMsg.blocks.length, 2);
   const promoActions = promoMsg.blocks[1] as {
     type: string;
@@ -352,10 +418,51 @@ Deno.test("slack-kit: queue config modal and delete confirm modal", () => {
   });
   assertEquals(confirmModal.type, "modal");
   assertEquals(confirmModal.callback_id, "queue_delete_confirm_modal");
-  assertEquals(confirmModal.submit?.text, "Sim, Remover Fila");
+  assertEquals(confirmModal.submit?.text, "Yes, Remove Queue");
   const meta = JSON.parse(confirmModal.private_metadata!);
   assertEquals(meta.queueId, "q-123");
   assertEquals(meta.channelId, "C100");
+});
+
+Deno.test("slack-kit: queue stats modal and home view", () => {
+  const statsModal = buildQueueStatsModal({
+    queueName: "deploy-prod",
+    channelName: "deploy-prod",
+    stats: {
+      totalEntries: 25,
+      completedHolds: 20,
+      autoExpiredHolds: 2,
+      kickedHolds: 1,
+      avgHoldMinutes: 28,
+      avgWaitMinutes: 8,
+      activeHoldersCount: 1,
+      waitingLineCount: 2,
+      topUsers: [
+        { userId: "U10", holdCount: 12 },
+        { userId: "U20", holdCount: 8 },
+      ],
+    },
+  });
+  assertEquals(statsModal.type, "modal");
+  assertEquals(statsModal.callback_id, "queue_stats_modal");
+  assertEquals(statsModal.blocks.length >= 4, true);
+
+  const homeView = buildQueueHomeView({
+    userId: "U10",
+    queues: [
+      {
+        queueId: "q-1",
+        name: "staging-deploy",
+        channelId: "C100",
+        maxConcurrency: 1,
+        activeHoldersCount: 1,
+        waitingLineCount: 2,
+        isAdmin: true,
+      },
+    ],
+  });
+  assertEquals(homeView.type, "home");
+  assertEquals(homeView.blocks.length >= 3, true);
 });
 
 Deno.test("slack-kit: modal response helpers", () => {

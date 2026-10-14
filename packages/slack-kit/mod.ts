@@ -474,18 +474,18 @@ export function buildSecretRevealedEphemeral(params: {
 }): SlackBlockMessagePayload {
   const isLastView = !params.remainingViews || params.remainingViews <= 0;
   const warningText = isLastView
-    ? "⚠️ *AVISO: Este segredo foi permanentemente destruído dos servidores.*\nCopie o valor abaixo antes de mudar de canal."
-    : `ℹ️ *Segredo Revelado.* Visualizações restantes: *${params.remainingViews}*.`;
+    ? "⚠️ *WARNING: This secret has been permanently purged from server memory.*\nCopy the value below before switching channels."
+    : `ℹ️ *Secret Revealed.* Remaining views: *${params.remainingViews}*.`;
 
   return {
     response_type: "ephemeral",
-    text: "🔓 Segredo Decriptado",
+    text: "🔓 Decrypted Secret",
     blocks: [
       {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `🔓 *Segredo Decriptado*\n${warningText}`,
+          text: `🔓 *Decrypted Secret*\n${warningText}`,
         },
       },
       {
@@ -500,7 +500,7 @@ export function buildSecretRevealedEphemeral(params: {
         elements: [
           {
             type: "mrkdwn",
-            text: `Compartilhado por: <@${params.creatorSlackId}> • Processado em: ${params.destroyedAtIso}`,
+            text: `Shared by: <@${params.creatorSlackId}> • Processed at: ${params.destroyedAtIso}`,
           },
         ],
       },
@@ -626,51 +626,25 @@ export function buildQueueCard(params: {
     });
   }
 
+  const joinButtonText = activeCount < params.maxConcurrency
+    ? "🙋 Join Queue"
+    : "🙋 Join Waiting Line";
+
   const actionElements: Record<string, unknown>[] = [
     {
       type: "button",
       action_id: "queue_join_click",
-      text: { type: "plain_text", text: "🙋 Join Queue", emoji: true },
+      text: { type: "plain_text", text: joinButtonText, emoji: true },
       style: "primary",
       value: params.queueId,
     },
     {
       type: "button",
-      action_id: "queue_done_click",
-      text: { type: "plain_text", text: "✅ Done / Release", emoji: true },
-      value: params.queueId,
-    },
-    {
-      type: "button",
-      action_id: "queue_extend_click",
-      text: { type: "plain_text", text: "⏱️ +15m", emoji: true },
+      action_id: "queue_my_actions_click",
+      text: { type: "plain_text", text: "⚡ My Actions", emoji: true },
       value: params.queueId,
     },
   ];
-
-  if (params.allowSecret) {
-    actionElements.push({
-      type: "button",
-      action_id: "queue_attach_secret_click",
-      text: {
-        type: "plain_text",
-        text: "🔐 Anexar Segredo Efêmero",
-        emoji: true,
-      },
-      value: params.queueId,
-    });
-  }
-
-  actionElements.push({
-    type: "button",
-    action_id: "queue_config_click",
-    text: {
-      type: "plain_text",
-      text: "⚙️ Configurar",
-      emoji: true,
-    },
-    value: params.queueId,
-  });
 
   blocks.push({
     type: "actions",
@@ -679,6 +653,129 @@ export function buildQueueCard(params: {
   });
 
   return { blocks };
+}
+
+export function buildQueueUserActionsEphemeral(params: {
+  channelName: string;
+  queueId: string;
+  userId: string;
+  userStatus: "active" | "waiting" | "none";
+  isAdmin: boolean;
+  expiresInMinutes?: number;
+  waitingPosition?: number;
+  waitingMinutes?: number;
+  allowSecret?: boolean;
+}): SlackBlockMessagePayload {
+  const blocks: SlackBlock[] = [];
+  const actionElements: Record<string, unknown>[] = [];
+
+  if (params.userStatus === "active") {
+    blocks.push({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text:
+          `⚡ *Active Lock Controls for #${params.channelName}*\n` +
+          `You currently hold the active slot. ⏳ Auto-expires in *${params.expiresInMinutes ?? 0}m*.`,
+      },
+    });
+
+    actionElements.push(
+      {
+        type: "button",
+        action_id: "queue_done_click",
+        text: { type: "plain_text", text: "✅ Done / Release", emoji: true },
+        style: "primary",
+        value: params.queueId,
+      },
+      {
+        type: "button",
+        action_id: "queue_extend_click",
+        text: { type: "plain_text", text: "⏱️ Extend +15m", emoji: true },
+        value: params.queueId,
+      },
+    );
+
+    if (params.allowSecret) {
+      actionElements.push({
+        type: "button",
+        action_id: "queue_attach_secret_click",
+        text: {
+          type: "plain_text",
+          text: "🔐 Attach Secret",
+          emoji: true,
+        },
+        value: params.queueId,
+      });
+    }
+  } else if (params.userStatus === "waiting") {
+    blocks.push({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text:
+          `📋 *Waiting Line Status for #${params.channelName}*\n` +
+          `You are currently *#${params.waitingPosition ?? 1}* in line (waiting for ${params.waitingMinutes ?? 0}m). We'll notify you as soon as you're up!`,
+      },
+    });
+
+    actionElements.push({
+      type: "button",
+      action_id: "queue_done_click",
+      text: { type: "plain_text", text: "🚪 Leave Queue", emoji: true },
+      style: "danger",
+      value: params.queueId,
+    });
+  } else {
+    blocks.push({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text:
+          `ℹ️ *Queue Actions for #${params.channelName}*\n` +
+          `You are not currently in the queue.`,
+      },
+    });
+
+    actionElements.push({
+      type: "button",
+      action_id: "queue_join_click",
+      text: { type: "plain_text", text: "🙋 Join Queue", emoji: true },
+      style: "primary",
+      value: params.queueId,
+    });
+  }
+
+  if (params.isAdmin) {
+    actionElements.push(
+      {
+        type: "button",
+        action_id: "queue_config_click",
+        text: { type: "plain_text", text: "⚙️ Queue Settings", emoji: true },
+        value: params.queueId,
+      },
+      {
+        type: "button",
+        action_id: "queue_stats_click",
+        text: { type: "plain_text", text: "📊 Queue Stats", emoji: true },
+        value: params.queueId,
+      },
+    );
+  }
+
+  if (actionElements.length > 0) {
+    blocks.push({
+      type: "actions",
+      block_id: "queue_user_actions_block",
+      elements: actionElements,
+    });
+  }
+
+  return {
+    response_type: "ephemeral",
+    text: `⚡ Queue controls for #${params.channelName}`,
+    blocks,
+  };
 }
 
 export function buildQueuePromotionMessage(params: {
@@ -694,23 +791,7 @@ export function buildQueuePromotionMessage(params: {
     ? ` (auto-released or handed off from <@${params.previousHolderUserId}>)`
     : "";
 
-  const elements: Record<string, unknown>[] = [];
-
-  if (params.allowSecret) {
-    elements.push({
-      type: "button",
-      action_id: "queue_attach_secret_click",
-      text: {
-        type: "plain_text",
-        text: "🔐 Anexar Segredo Efêmero",
-        emoji: true,
-      },
-      style: "primary",
-      value: params.queueId ?? params.channelName,
-    });
-  }
-
-  elements.push(
+  const elements: Record<string, unknown>[] = [
     {
       type: "button",
       action_id: "queue_done_click",
@@ -726,15 +807,29 @@ export function buildQueuePromotionMessage(params: {
       action_id: "queue_extend_click",
       text: {
         type: "plain_text",
-        text: "⏱️ +15m",
+        text: "⏱️ Extend +15m",
         emoji: true,
       },
       value: params.queueId ?? params.channelName,
     },
-  );
+  ];
+
+  if (params.allowSecret) {
+    elements.push({
+      type: "button",
+      action_id: "queue_attach_secret_click",
+      text: {
+        type: "plain_text",
+        text: "🔐 Attach Secret",
+        emoji: true,
+      },
+      style: "primary",
+      value: params.queueId ?? params.channelName,
+    });
+  }
 
   return {
-    response_type: "in_channel",
+    response_type: "ephemeral",
     text:
       `🚀 <@${params.promotedUserId}>, you're up! You now hold the active lock on #${params.channelName}.`,
     blocks: [
@@ -765,22 +860,22 @@ export function buildQueueConfigModal(params: {
   adminUserIds: string[];
 }): SlackModalView {
   const concurrencyOptions = [
-    { text: { type: "plain_text" as const, text: "1 vaga (Mutex exclusivo)" }, value: "1" },
-    { text: { type: "plain_text" as const, text: "2 vagas simultâneas" }, value: "2" },
-    { text: { type: "plain_text" as const, text: "3 vagas simultâneas" }, value: "3" },
-    { text: { type: "plain_text" as const, text: "4 vagas simultâneas" }, value: "4" },
-    { text: { type: "plain_text" as const, text: "5 vagas simultâneas" }, value: "5" },
+    { text: { type: "plain_text" as const, text: "1 slot (Exclusive Mutex)" }, value: "1" },
+    { text: { type: "plain_text" as const, text: "2 concurrent slots" }, value: "2" },
+    { text: { type: "plain_text" as const, text: "3 concurrent slots" }, value: "3" },
+    { text: { type: "plain_text" as const, text: "4 concurrent slots" }, value: "4" },
+    { text: { type: "plain_text" as const, text: "5 concurrent slots" }, value: "5" },
   ];
   const initialConcurrencyOption =
     concurrencyOptions.find((o) => o.value === String(params.maxConcurrency)) ??
     concurrencyOptions[0];
 
   const holdOptions = [
-    { text: { type: "plain_text" as const, text: "15 minutos" }, value: "15" },
-    { text: { type: "plain_text" as const, text: "30 minutos" }, value: "30" },
-    { text: { type: "plain_text" as const, text: "45 minutos" }, value: "45" },
-    { text: { type: "plain_text" as const, text: "60 minutos (1 hora)" }, value: "60" },
-    { text: { type: "plain_text" as const, text: "120 minutos (2 horas)" }, value: "120" },
+    { text: { type: "plain_text" as const, text: "15 minutes" }, value: "15" },
+    { text: { type: "plain_text" as const, text: "30 minutes" }, value: "30" },
+    { text: { type: "plain_text" as const, text: "45 minutes" }, value: "45" },
+    { text: { type: "plain_text" as const, text: "60 minutes (1 hour)" }, value: "60" },
+    { text: { type: "plain_text" as const, text: "120 minutes (2 hours)" }, value: "120" },
   ];
   const initialHoldOption =
     holdOptions.find((o) => o.value === String(params.maxHoldMinutes)) ??
@@ -793,9 +888,9 @@ export function buildQueueConfigModal(params: {
   return {
     type: "modal",
     callback_id: "queue_config_modal",
-    title: { type: "plain_text", text: "Configurar Fila", emoji: true },
-    submit: { type: "plain_text", text: "Salvar", emoji: true },
-    close: { type: "plain_text", text: "Cancelar", emoji: true },
+    title: { type: "plain_text", text: "Queue Settings", emoji: true },
+    submit: { type: "plain_text", text: "Save", emoji: true },
+    close: { type: "plain_text", text: "Cancel", emoji: true },
     private_metadata: JSON.stringify({
       queueId: params.queueId,
       channelId: params.channelId,
@@ -810,12 +905,12 @@ export function buildQueueConfigModal(params: {
           initial_value: params.channelName,
           placeholder: {
             type: "plain_text",
-            text: "Ex: canal-deploy",
+            text: "e.g. deploy-prod",
           },
         },
         label: {
           type: "plain_text",
-          text: "Nome da Fila",
+          text: "Queue Name",
           emoji: true,
         },
       },
@@ -827,14 +922,14 @@ export function buildQueueConfigModal(params: {
           action_id: "max_concurrency_input",
           placeholder: {
             type: "plain_text",
-            text: "Selecione a concorrência",
+            text: "Select concurrency",
           },
           initial_option: initialConcurrencyOption,
           options: concurrencyOptions,
         },
         label: {
           type: "plain_text",
-          text: "Vagas Simultâneas (Concorrência)",
+          text: "Concurrency (Active Slots)",
           emoji: true,
         },
       },
@@ -846,14 +941,14 @@ export function buildQueueConfigModal(params: {
           action_id: "max_hold_minutes_input",
           placeholder: {
             type: "plain_text",
-            text: "Selecione o tempo máximo",
+            text: "Select maximum hold time",
           },
           initial_option: initialHoldOption,
           options: holdOptions,
         },
         label: {
           type: "plain_text",
-          text: "Tempo Máximo de Posse",
+          text: "Maximum Hold Duration",
           emoji: true,
         },
       },
@@ -868,7 +963,7 @@ export function buildQueueConfigModal(params: {
             {
               text: {
                 type: "plain_text",
-                text: "Habilitar botão de Segredo Efêmero no card da fila",
+                text: "Enable Ephemeral Secret button in queue actions",
                 emoji: true,
               },
               value: "allow_secret",
@@ -880,7 +975,7 @@ export function buildQueueConfigModal(params: {
                   {
                     text: {
                       type: "plain_text",
-                      text: "Habilitar botão de Segredo Efêmero no card da fila",
+                      text: "Enable Ephemeral Secret button in queue actions",
                       emoji: true,
                     },
                     value: "allow_secret",
@@ -891,7 +986,7 @@ export function buildQueueConfigModal(params: {
         },
         label: {
           type: "plain_text",
-          text: "Segredo Efêmero (Secret App)",
+          text: "Ephemeral Secrets (Secret App)",
           emoji: true,
         },
       },
@@ -904,7 +999,7 @@ export function buildQueueConfigModal(params: {
           action_id: "admin_users_input",
           placeholder: {
             type: "plain_text",
-            text: "Selecione administradores da fila",
+            text: "Select queue administrators",
           },
           ...(validAdminUserIds.length > 0
             ? { initial_users: validAdminUserIds }
@@ -912,7 +1007,7 @@ export function buildQueueConfigModal(params: {
         },
         label: {
           type: "plain_text",
-          text: "Administradores da Fila",
+          text: "Queue Administrators",
           emoji: true,
         },
       },
@@ -921,14 +1016,14 @@ export function buildQueueConfigModal(params: {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: "*⚠️ Zona de Perigo*\nRemover a fila encerra o card do canal e cancela todos os slots e esperas ativas.",
+          text: "*⚠️ Danger Zone*\nRemoving the queue terminates the channel card and cancels all active slots and waiting lines.",
         },
         accessory: {
           type: "button",
           action_id: "queue_delete_modal_click",
           text: {
             type: "plain_text",
-            text: "🗑️ Remover Fila",
+            text: "🗑️ Remove Queue",
             emoji: true,
           },
           style: "danger",
@@ -947,9 +1042,9 @@ export function buildQueueDeleteConfirmModal(params: {
   return {
     type: "modal",
     callback_id: "queue_delete_confirm_modal",
-    title: { type: "plain_text", text: "Remover Fila", emoji: true },
-    submit: { type: "plain_text", text: "Sim, Remover Fila", emoji: true },
-    close: { type: "plain_text", text: "Cancelar", emoji: true },
+    title: { type: "plain_text", text: "Remove Queue", emoji: true },
+    submit: { type: "plain_text", text: "Yes, Remove Queue", emoji: true },
+    close: { type: "plain_text", text: "Cancel", emoji: true },
     private_metadata: JSON.stringify({
       queueId: params.queueId,
       channelId: params.channelId,
@@ -960,11 +1055,11 @@ export function buildQueueDeleteConfirmModal(params: {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `⚠️ *Tem certeza que deseja remover a fila de #${params.channelName}?*\n\n` +
-            `• O card fixo no canal será permanentemente excluído.\n` +
-            `• Todos os usuários com posse ativa e os participantes na fila de espera serão liberados.\n` +
-            `• Qualquer tarefa de timeout agendada será cancelada imediatamente.\n\n` +
-            `_Se alguém executar \`/queue\` posteriormente, uma nova fila limpa poderá ser criada._`,
+          text: `⚠️ *Are you sure you want to remove the queue for #${params.channelName}?*\n\n` +
+            `• The sticky card in the channel will be permanently deleted.\n` +
+            `• All active holds and waiting teammates will be released.\n` +
+            `• Any scheduled auto-expiration timers will be cancelled immediately.\n\n` +
+            `_You can recreate a fresh queue anytime by running \`/queue\` in the channel._`,
         },
       },
     ],
@@ -982,9 +1077,9 @@ export function buildQueueTimeoutWarningMessage(params: {
   allowSecret?: boolean;
 }): SlackBlockMessagePayload {
   const waiterText = params.nextWaiterUserId
-    ? ` e <@${params.nextWaiterUserId}> está aguardando na fila`
+    ? ` and <@${params.nextWaiterUserId}> is waiting in line`
     : (params.waitingCount > 0
-      ? ` e ${params.waitingCount} colega(s) aguardando na fila`
+      ? ` and ${params.waitingCount} teammate(s) waiting in line`
       : "");
 
   const elements: Record<string, unknown>[] = [
@@ -993,7 +1088,7 @@ export function buildQueueTimeoutWarningMessage(params: {
       action_id: "queue_extend_click",
       text: {
         type: "plain_text",
-        text: "⏱️ Estender +15m",
+        text: "⏱️ Extend +15m",
         emoji: true,
       },
       style: "primary",
@@ -1004,7 +1099,7 @@ export function buildQueueTimeoutWarningMessage(params: {
       action_id: "queue_done_click",
       text: {
         type: "plain_text",
-        text: "✅ Liberar Vaga",
+        text: "✅ Done / Release",
         emoji: true,
       },
       value: params.queueId ?? params.channelName,
@@ -1017,7 +1112,7 @@ export function buildQueueTimeoutWarningMessage(params: {
       action_id: "queue_attach_secret_click",
       text: {
         type: "plain_text",
-        text: "🔐 Anexar Segredo Efêmero",
+        text: "🔐 Attach Secret",
         emoji: true,
       },
       value: params.queueId ?? params.channelName,
@@ -1027,14 +1122,14 @@ export function buildQueueTimeoutWarningMessage(params: {
   return {
     response_type: "ephemeral",
     text:
-      `⏳ Seu tempo de posse em #${params.channelName} expira em ${params.minutesRemaining} minutos!`,
+      `⏳ Your lock on #${params.channelName} expires in ${params.minutesRemaining} minutes!`,
     blocks: [
       {
         type: "section",
         text: {
           type: "mrkdwn",
           text:
-            `⏳ *Seu tempo de posse em #${params.channelName} expira em ${params.minutesRemaining} minutos*${waiterText}.\nPrecisa de mais tempo?`,
+            `⏳ *Your lock on #${params.channelName} expires in ${params.minutesRemaining} minutes*${waiterText}.\nNeed more time?`,
         },
       },
       {
@@ -1043,6 +1138,187 @@ export function buildQueueTimeoutWarningMessage(params: {
         elements,
       },
     ],
+  };
+}
+
+export function buildQueueStatsModal(params: {
+  queueName: string;
+  channelName: string;
+  stats: {
+    totalEntries: number;
+    completedHolds: number;
+    autoExpiredHolds: number;
+    kickedHolds: number;
+    avgHoldMinutes: number;
+    avgWaitMinutes: number;
+    activeHoldersCount: number;
+    waitingLineCount: number;
+    topUsers: { userId: string; holdCount: number }[];
+  };
+}): SlackModalView {
+  const topUsersText = params.stats.topUsers.length > 0
+    ? params.stats.topUsers
+      .map((u, i) => `${i + 1}. <@${u.userId}> — *${u.holdCount}* session(s)`)
+      .join("\n")
+    : "_No historical data yet._";
+
+  return {
+    type: "modal",
+    callback_id: "queue_stats_modal",
+    title: { type: "plain_text", text: "Queue Analytics", emoji: true },
+    close: { type: "plain_text", text: "Close", emoji: true },
+    blocks: [
+      {
+        type: "header",
+        text: {
+          type: "plain_text",
+          text: `📊 Analytics for #${params.channelName}`,
+          emoji: true,
+        },
+      },
+      {
+        type: "section",
+        fields: [
+          {
+            type: "mrkdwn",
+            text: `*🟢 Active Holds:*\n${params.stats.activeHoldersCount}`,
+          },
+          {
+            type: "mrkdwn",
+            text: `*📋 Waiting in Line:*\n${params.stats.waitingLineCount}`,
+          },
+          {
+            type: "mrkdwn",
+            text: `*✅ Completed Holds:*\n${params.stats.completedHolds}`,
+          },
+          {
+            type: "mrkdwn",
+            text: `*⌛ Auto-Expirations:*\n${params.stats.autoExpiredHolds}`,
+          },
+          {
+            type: "mrkdwn",
+            text: `*⏱️ Avg Hold Time:*\n~${params.stats.avgHoldMinutes} min`,
+          },
+          {
+            type: "mrkdwn",
+            text: `*⏳ Avg Wait Time:*\n~${params.stats.avgWaitMinutes} min`,
+          },
+        ],
+      },
+      { type: "divider" },
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `*🏆 Top Active Users*\n${topUsersText}`,
+        },
+      },
+    ],
+  };
+}
+
+export function buildQueueHomeView(params: {
+  userId: string;
+  queues: {
+    queueId: string;
+    name: string;
+    channelId: string;
+    maxConcurrency: number;
+    activeHoldersCount: number;
+    waitingLineCount: number;
+    isAdmin: boolean;
+  }[];
+}): SlackHomeView {
+  const blocks: SlackBlock[] = [
+    {
+      type: "header",
+      text: {
+        type: "plain_text",
+        text: "🚦 Queue Manager Dashboard",
+        emoji: true,
+      },
+    },
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text:
+          `Welcome to *Queue*, <@${params.userId}>! Easily manage deployment locks, environment access, and teammate handoffs with zero channel noise.`,
+      },
+    },
+    { type: "divider" },
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `*📡 Active Channel Queues (${params.queues.length})*`,
+      },
+    },
+  ];
+
+  if (params.queues.length === 0) {
+    blocks.push({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text:
+          "_No queues configured in this workspace yet. Type `/queue` in any channel to create one!_",
+      },
+    });
+  } else {
+    for (const q of params.queues) {
+      const statusText = `*#${q.name}* (<#${q.channelId}>)\n` +
+        `• Active: *${q.activeHoldersCount}/${q.maxConcurrency}* slots occupied\n` +
+        `• Waiting Line: *${q.waitingLineCount}* teammate(s)\n` +
+        `• Role: ${q.isAdmin ? "👑 *Administrator*" : "👤 *Member*"}`;
+
+      const accessory: Record<string, unknown> = q.isAdmin
+        ? {
+            type: "button",
+            action_id: "queue_config_click",
+            text: {
+              type: "plain_text",
+              text: "⚙️ Settings",
+              emoji: true,
+            },
+            value: q.queueId,
+          }
+        : {
+            type: "button",
+            action_id: "queue_my_actions_click",
+            text: {
+              type: "plain_text",
+              text: "⚡ View Actions",
+              emoji: true,
+            },
+            value: q.queueId,
+          };
+
+      blocks.push({
+        type: "section",
+        text: { type: "mrkdwn", text: statusText },
+        accessory,
+      });
+    }
+  }
+
+  blocks.push(
+    { type: "divider" },
+    {
+      type: "context",
+      elements: [
+        {
+          type: "mrkdwn",
+          text:
+            "💡 *Tip:* Use `/queue` in any channel to see live status, `/queue join` to claim a slot, or `/queue stats` for channel analytics.",
+        },
+      ],
+    },
+  );
+
+  return {
+    type: "home",
+    blocks,
   };
 }
 

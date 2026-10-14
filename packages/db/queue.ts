@@ -72,6 +72,18 @@ export interface AutoExpireResult {
   promotedEntry?: QueueEntryRow | null;
 }
 
+export interface QueueStats {
+  totalEntries: number;
+  completedHolds: number;
+  autoExpiredHolds: number;
+  kickedHolds: number;
+  avgHoldMinutes: number;
+  avgWaitMinutes: number;
+  activeHoldersCount: number;
+  waitingLineCount: number;
+  topUsers: { userId: string; holdCount: number }[];
+}
+
 async function withTx<T>(
   sql: Sql,
   fn: (tx: Sql) => Promise<T>,
@@ -1076,5 +1088,118 @@ export const queuesRepo = {
         promotedEntry: null,
       };
     });
+  },
+
+  async getQueueStats(
+    queueId: string,
+    sql: Sql = getSqlRead(),
+  ): Promise<QueueStats> {
+    const isUuid = /^[0-9a-f-]{36}$/i.test(queueId);
+    if (!isUuid) {
+      return {
+        totalEntries: 0,
+        completedHolds: 0,
+        autoExpiredHolds: 0,
+        kickedHolds: 0,
+        avgHoldMinutes: 0,
+        avgWaitMinutes: 0,
+        activeHoldersCount: 0,
+        waitingLineCount: 0,
+        topUsers: [],
+      };
+    }
+
+    try {
+      const counts = await sql<{
+        total_entries: string;
+        completed_holds: string;
+        auto_expired_holds: string;
+        kicked_holds: string;
+        active_holders_count: string;
+        waiting_line_count: string;
+        avg_hold_seconds: string | null;
+        avg_wait_seconds: string | null;
+      }[]>`
+        SELECT
+          COUNT(*)::text AS total_entries,
+          COUNT(*) FILTER (WHERE status = 'released')::text AS completed_holds,
+          COUNT(*) FILTER (WHERE status = 'expired')::text AS auto_expired_holds,
+          COUNT(*) FILTER (WHERE status = 'kicked')::text AS kicked_holds,
+          COUNT(*) FILTER (WHERE status = 'active')::text AS active_holders_count,
+          COUNT(*) FILTER (WHERE status = 'waiting')::text AS waiting_line_count,
+          AVG(EXTRACT(EPOCH FROM (completed_at - activated_at))) FILTER (WHERE completed_at IS NOT NULL AND activated_at IS NOT NULL)::text AS avg_hold_seconds,
+          AVG(EXTRACT(EPOCH FROM (activated_at - joined_at))) FILTER (WHERE activated_at IS NOT NULL)::text AS avg_wait_seconds
+        FROM queue_entries
+        WHERE queue_id = ${queueId}::uuid
+      `;
+
+      const top = await sql<{ slack_user_id: string; cnt: string }[]>`
+        SELECT slack_user_id, COUNT(*)::text AS cnt
+        FROM queue_entries
+        WHERE queue_id = ${queueId}::uuid
+        GROUP BY slack_user_id
+        ORDER BY COUNT(*) DESC
+        LIMIT 5
+      `;
+
+      const row = counts[0] ?? {
+        total_entries: "0",
+        completed_holds: "0",
+        auto_expired_holds: "0",
+        kicked_holds: "0",
+        active_holders_count: "0",
+        waiting_line_count: "0",
+        avg_hold_seconds: null,
+        avg_wait_seconds: null,
+      };
+
+      const avgHoldSec = row.avg_hold_seconds ? parseFloat(row.avg_hold_seconds) : 0;
+      const avgWaitSec = row.avg_wait_seconds ? parseFloat(row.avg_wait_seconds) : 0;
+
+      return {
+        totalEntries: parseInt(row.total_entries || "0", 10),
+        completedHolds: parseInt(row.completed_holds || "0", 10),
+        autoExpiredHolds: parseInt(row.auto_expired_holds || "0", 10),
+        kickedHolds: parseInt(row.kicked_holds || "0", 10),
+        activeHoldersCount: parseInt(row.active_holders_count || "0", 10),
+        waitingLineCount: parseInt(row.waiting_line_count || "0", 10),
+        avgHoldMinutes: Math.round(avgHoldSec / 60),
+        avgWaitMinutes: Math.round(avgWaitSec / 60),
+        topUsers: top.map((t) => ({
+          userId: t.slack_user_id,
+          holdCount: parseInt(t.cnt, 10),
+        })),
+      };
+    } catch {
+      return {
+        totalEntries: 0,
+        completedHolds: 0,
+        autoExpiredHolds: 0,
+        kickedHolds: 0,
+        avgHoldMinutes: 0,
+        avgWaitMinutes: 0,
+        activeHoldersCount: 0,
+        waitingLineCount: 0,
+        topUsers: [],
+      };
+    }
+  },
+
+  async listQueuesByWorkspace(
+    workspaceId: string,
+    sql: Sql = getSqlRead(),
+  ): Promise<QueueRow[]> {
+    const isUuid = /^[0-9a-f-]{36}$/i.test(workspaceId);
+    if (!isUuid) return [];
+    try {
+      return await sql<QueueRow[]>`
+        SELECT * FROM queues
+        WHERE workspace_id = ${workspaceId}::uuid
+        ORDER BY created_at DESC
+        LIMIT 20
+      `;
+    } catch {
+      return [];
+    }
   },
 };
