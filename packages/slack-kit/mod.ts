@@ -626,23 +626,57 @@ export function buildQueueCard(params: {
     });
   }
 
-  const joinButtonText = activeCount < params.maxConcurrency
-    ? "🙋 Join Queue"
-    : "🙋 Join Waiting Line";
+  const dropdownOptions: {
+    text: { type: "plain_text"; text: string; emoji?: boolean };
+    value: string;
+  }[] = [
+    {
+      text: { type: "plain_text", text: "⏱️ Extend +15m", emoji: true },
+      value: `extend:${params.queueId}`,
+    },
+  ];
+
+  if (params.allowSecret) {
+    dropdownOptions.push({
+      text: { type: "plain_text", text: "🔐 Attach Secret", emoji: true },
+      value: `secret:${params.queueId}`,
+    });
+  }
+
+  dropdownOptions.push(
+    {
+      text: { type: "plain_text", text: "📊 Queue Stats", emoji: true },
+      value: `stats:${params.queueId}`,
+    },
+    {
+      text: { type: "plain_text", text: "⚙️ Queue Settings", emoji: true },
+      value: `config:${params.queueId}`,
+    },
+  );
 
   const actionElements: Record<string, unknown>[] = [
     {
       type: "button",
       action_id: "queue_join_click",
-      text: { type: "plain_text", text: joinButtonText, emoji: true },
+      text: { type: "plain_text", text: "🙋 Join", emoji: true },
       style: "primary",
       value: params.queueId,
     },
     {
       type: "button",
-      action_id: "queue_my_actions_click",
-      text: { type: "plain_text", text: "⚡ My Actions", emoji: true },
+      action_id: "queue_done_click",
+      text: { type: "plain_text", text: "🚪 Done / Leave", emoji: true },
       value: params.queueId,
+    },
+    {
+      type: "static_select",
+      action_id: "queue_actions_select",
+      placeholder: {
+        type: "plain_text",
+        text: "⚡ Actions...",
+        emoji: true,
+      },
+      options: dropdownOptions,
     },
   ];
 

@@ -801,8 +801,22 @@ app.post(
     // Handle block actions
     if (payload.type === "block_actions") {
       const action = payload.actions?.[0];
-      const actionId = action?.action_id;
-      const actionVal = String(action?.value ?? "");
+      let actionId = action?.action_id;
+      let actionVal = String(action?.value ?? "");
+
+      // Handle dropdown menu selection (format: "command:queueId")
+      if (actionId === "queue_actions_select") {
+        const selectedVal = String(action?.selected_option?.value ?? "");
+        const colonIdx = selectedVal.indexOf(":");
+        if (colonIdx !== -1) {
+          const cmd = selectedVal.slice(0, colonIdx);
+          actionVal = selectedVal.slice(colonIdx + 1);
+          if (cmd === "extend") actionId = "queue_extend_click";
+          else if (cmd === "secret") actionId = "queue_attach_secret_click";
+          else if (cmd === "stats") actionId = "queue_stats_click";
+          else if (cmd === "config") actionId = "queue_config_click";
+        }
+      }
 
       // Resolve queue: action value might be queueId, or look up by channel
       let queue: QueueRow | null = null;
@@ -1047,28 +1061,25 @@ app.post(
 
         await syncStickyQueueCard({
           queueId: queue.id,
-          channelId,
+          channelId: channelId || queue.slack_channel_id,
+          channelName: queue.name,
           botToken,
         });
 
-        if (joinRes.status === "already_in_queue" && botToken && channelId) {
-          const state = await queuesRepo.getQueueState(queue.id);
-          const isHolder = state.activeHolders.some((h) => h.slack_user_id === userId);
-          const userActionsMsg = buildQueueUserActionsEphemeral({
-            channelName: queue.name,
-            queueId: queue.id,
+        if (joinRes.status === "already_in_queue" && botToken && (channelId || queue.slack_channel_id)) {
+          await slackApi.postEphemeral(
+            botToken,
+            channelId || queue.slack_channel_id,
             userId,
-            userStatus: isHolder ? "active" : "waiting",
-            isAdmin: queuesRepo.isUserAdmin(queue, userId),
-            expiresInMinutes: queue.max_hold_minutes,
-            allowSecret: queue.allow_secret,
-          });
-          await slackApi.postEphemeral(botToken, channelId, userId, userActionsMsg);
+            {
+              text: "ℹ️ You are already in this queue. Click *Done / Leave* when you finish.",
+            },
+          );
         } else if (joinRes.status === "acquired" && botToken) {
           const promoMsg = buildQueuePromotionMessage({
             channelName: queue.name,
             queueId: queue.id,
-            channelId,
+            channelId: channelId || queue.slack_channel_id,
             promotedUserId: userId,
             maxHoldMinutes: queue.max_hold_minutes,
             allowSecret: queue.allow_secret,
@@ -1090,7 +1101,7 @@ app.post(
           const promoMsg = buildQueuePromotionMessage({
             channelName: queue.name,
             queueId: queue.id,
-            channelId,
+            channelId: channelId || queue.slack_channel_id,
             promotedUserId: relRes.promotedEntry.slack_user_id,
             previousHolderUserId: userId,
             maxHoldMinutes: queue.max_hold_minutes,
@@ -1101,15 +1112,27 @@ app.post(
 
         await syncStickyQueueCard({
           queueId: queue.id,
-          channelId,
+          channelId: channelId || queue.slack_channel_id,
+          channelName: queue.name,
           botToken,
         });
+
+        if (relRes.status === "not_in_queue" && botToken && (channelId || queue.slack_channel_id)) {
+          await slackApi.postEphemeral(
+            botToken,
+            channelId || queue.slack_channel_id,
+            userId,
+            {
+              text: "⚠️ You do not hold an active lock or waiting spot in this queue.",
+            },
+          );
+        }
         return c.text("OK");
       }
 
       // 5. Extend click
       if (actionId === "queue_extend_click") {
-        await queuesRepo.extendLock({
+        const extRes = await queuesRepo.extendLock({
           queueId: queue.id,
           workspaceId,
           slackUserId: userId,
@@ -1118,9 +1141,21 @@ app.post(
 
         await syncStickyQueueCard({
           queueId: queue.id,
-          channelId,
+          channelId: channelId || queue.slack_channel_id,
+          channelName: queue.name,
           botToken,
         });
+
+        if (extRes.status !== "extended" && botToken && (channelId || queue.slack_channel_id)) {
+          await slackApi.postEphemeral(
+            botToken,
+            channelId || queue.slack_channel_id,
+            userId,
+            {
+              text: "⚠️ You do not hold an active lock on this queue to extend.",
+            },
+          );
+        }
         return c.text("OK");
       }
     }

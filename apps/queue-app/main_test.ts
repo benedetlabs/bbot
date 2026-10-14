@@ -1533,6 +1533,290 @@ Deno.test("queue-app: queue_my_actions_click posts ephemeral private controls", 
   }
 });
 
+Deno.test("queue-app: queue_actions_select dropdown routes extend and updates card silently", async () => {
+  let extendCalled = false;
+  let updateCalled = false;
+
+  const origGetQueueById = queuesRepo.getQueueById;
+  const origExtendLock = queuesRepo.extendLock;
+  const origGetQueueState = queuesRepo.getQueueState;
+  const origUpdateMessage = slackApi.updateMessage;
+  const origFindWorkspace = workspacesRepo.findBySlackTeamId;
+
+  workspacesRepo.findBySlackTeamId = (() => {
+    return Promise.resolve({
+      id: "ws-1",
+      slack_team_id: "T1",
+      slack_enterprise_id: null,
+      team_name: "testteam",
+      plan_tier: "free",
+      has_secret_audit_addon: false,
+      stripe_customer_id: null,
+      stripe_subscription_id: null,
+      billing_status: "active",
+      created_at: new Date(),
+      updated_at: new Date(),
+    });
+  }) as typeof workspacesRepo.findBySlackTeamId;
+
+  queuesRepo.getQueueById = ((id) => {
+    return Promise.resolve({
+      id,
+      workspace_id: "ws-1",
+      slack_channel_id: "C100",
+      name: "staging",
+      max_concurrency: 1,
+      max_hold_minutes: 45,
+      sticky_message_ts: "1700000000.999",
+      admin_user_ids: ["U10"],
+      allow_secret: true,
+      created_at: new Date(),
+    });
+  }) as typeof queuesRepo.getQueueById;
+
+  queuesRepo.getQueueState = (() => {
+    return Promise.resolve({
+      queue: {
+        id: "queue-1",
+        workspace_id: "ws-1",
+        slack_channel_id: "C100",
+        name: "staging",
+        max_concurrency: 1,
+        max_hold_minutes: 45,
+        sticky_message_ts: "1700000000.999",
+        admin_user_ids: ["U10"],
+        allow_secret: true,
+        created_at: new Date(),
+      },
+      activeHolders: [
+        {
+          id: "e-1",
+          queue_id: "queue-1",
+          slack_user_id: "U10",
+          status: "active",
+          reason_note: null,
+          joined_at: new Date(),
+          activated_at: new Date(),
+          expires_at: new Date(Date.now() + 45 * 60000),
+          completed_at: null,
+        },
+      ],
+      waitingLine: [],
+    });
+  }) as typeof queuesRepo.getQueueState;
+
+  queuesRepo.extendLock = ((params) => {
+    extendCalled = true;
+    assertEquals(params.queueId, "queue-1");
+    assertEquals(params.slackUserId, "U10");
+    assertEquals(params.extraMinutes, 15);
+    return Promise.resolve({ status: "extended" });
+  }) as typeof queuesRepo.extendLock;
+
+  slackApi.updateMessage = (_token, channelId, ts) => {
+    updateCalled = true;
+    assertEquals(channelId, "C100");
+    assertEquals(ts, "1700000000.999");
+    return Promise.resolve({ ok: true });
+  };
+
+  const origEnv = Deno.env.get("QUEUE_APP_BOT_TOKEN");
+  Deno.env.set("QUEUE_APP_BOT_TOKEN", "xoxb-queue-token");
+
+  try {
+    const payload = {
+      type: "block_actions",
+      team: { id: "T1" },
+      user: { id: "U10" },
+      channel: { id: "C100" },
+      actions: [
+        {
+          action_id: "queue_actions_select",
+          selected_option: {
+            value: "extend:queue-1",
+            text: { type: "plain_text", text: "⏱️ Extend +15m" },
+          },
+        },
+      ],
+    };
+
+    const body = `payload=${encodeURIComponent(JSON.stringify(payload))}`;
+    const headers = await createSignedHeaders(body);
+
+    const req = new Request("http://localhost:8080/slack/interactions", {
+      method: "POST",
+      headers,
+      body,
+    });
+
+    const res = await app.fetch(req);
+    assertEquals(res.status, 200);
+    assertEquals(await res.text(), "OK");
+    assertEquals(extendCalled, true);
+    assertEquals(updateCalled, true);
+  } finally {
+    queuesRepo.getQueueById = origGetQueueById;
+    queuesRepo.extendLock = origExtendLock;
+    queuesRepo.getQueueState = origGetQueueState;
+    slackApi.updateMessage = origUpdateMessage;
+    workspacesRepo.findBySlackTeamId = origFindWorkspace;
+    if (origEnv !== undefined) Deno.env.set("QUEUE_APP_BOT_TOKEN", origEnv);
+    else Deno.env.delete("QUEUE_APP_BOT_TOKEN");
+  }
+});
+
+Deno.test("queue-app: queue_done_click releases active slot and notifies next in line via DM", async () => {
+  let releaseCalled = false;
+  let updateCalled = false;
+  let promoDmSent = false;
+  let promoRecipient = "";
+
+  const origGetQueueById = queuesRepo.getQueueById;
+  const origReleaseLock = queuesRepo.releaseLock;
+  const origGetQueueState = queuesRepo.getQueueState;
+  const origUpdateMessage = slackApi.updateMessage;
+  const origPostMessage = slackApi.postMessage;
+  const origFindWorkspace = workspacesRepo.findBySlackTeamId;
+
+  workspacesRepo.findBySlackTeamId = (() => {
+    return Promise.resolve({
+      id: "ws-1",
+      slack_team_id: "T1",
+      slack_enterprise_id: null,
+      team_name: "testteam",
+      plan_tier: "free",
+      has_secret_audit_addon: false,
+      stripe_customer_id: null,
+      stripe_subscription_id: null,
+      billing_status: "active",
+      created_at: new Date(),
+      updated_at: new Date(),
+    });
+  }) as typeof workspacesRepo.findBySlackTeamId;
+
+  queuesRepo.getQueueById = ((id) => {
+    return Promise.resolve({
+      id,
+      workspace_id: "ws-1",
+      slack_channel_id: "C100",
+      name: "staging",
+      max_concurrency: 1,
+      max_hold_minutes: 45,
+      sticky_message_ts: "1700000000.999",
+      admin_user_ids: ["U10"],
+      allow_secret: true,
+      created_at: new Date(),
+    });
+  }) as typeof queuesRepo.getQueueById;
+
+  queuesRepo.getQueueState = (() => {
+    return Promise.resolve({
+      queue: {
+        id: "queue-1",
+        workspace_id: "ws-1",
+        slack_channel_id: "C100",
+        name: "staging",
+        max_concurrency: 1,
+        max_hold_minutes: 45,
+        sticky_message_ts: "1700000000.999",
+        admin_user_ids: ["U10"],
+        allow_secret: true,
+        created_at: new Date(),
+      },
+      activeHolders: [],
+      waitingLine: [],
+    });
+  }) as typeof queuesRepo.getQueueState;
+
+  queuesRepo.releaseLock = ((params) => {
+    releaseCalled = true;
+    assertEquals(params.queueId, "queue-1");
+    assertEquals(params.slackUserId, "U10");
+    return Promise.resolve({
+      status: "released",
+      releasedEntry: {
+        id: "e-1",
+        queue_id: "queue-1",
+        slack_user_id: "U10",
+        status: "released",
+        reason_note: null,
+        joined_at: new Date(),
+        activated_at: new Date(),
+        expires_at: new Date(),
+        completed_at: new Date(),
+      },
+      promotedEntry: {
+        id: "e-2",
+        queue_id: "queue-1",
+        slack_user_id: "U20",
+        status: "active",
+        reason_note: null,
+        joined_at: new Date(),
+        activated_at: new Date(),
+        expires_at: new Date(Date.now() + 45 * 60000),
+        completed_at: null,
+      },
+    });
+  }) as typeof queuesRepo.releaseLock;
+
+  slackApi.updateMessage = (_token, channelId, ts) => {
+    updateCalled = true;
+    assertEquals(channelId, "C100");
+    assertEquals(ts, "1700000000.999");
+    return Promise.resolve({ ok: true });
+  };
+
+  slackApi.postMessage = (_token, recipient) => {
+    promoDmSent = true;
+    promoRecipient = recipient;
+    return Promise.resolve({ ok: true });
+  };
+
+  const origEnv = Deno.env.get("QUEUE_APP_BOT_TOKEN");
+  Deno.env.set("QUEUE_APP_BOT_TOKEN", "xoxb-queue-token");
+
+  try {
+    const payload = {
+      type: "block_actions",
+      team: { id: "T1" },
+      user: { id: "U10" },
+      channel: { id: "C100" },
+      actions: [
+        {
+          action_id: "queue_done_click",
+          value: "queue-1",
+        },
+      ],
+    };
+
+    const body = `payload=${encodeURIComponent(JSON.stringify(payload))}`;
+    const headers = await createSignedHeaders(body);
+
+    const req = new Request("http://localhost:8080/slack/interactions", {
+      method: "POST",
+      headers,
+      body,
+    });
+
+    const res = await app.fetch(req);
+    assertEquals(res.status, 200);
+    assertEquals(await res.text(), "OK");
+    assertEquals(releaseCalled, true);
+    assertEquals(updateCalled, true);
+    assertEquals(promoDmSent, true);
+    assertEquals(promoRecipient, "U20");
+  } finally {
+    queuesRepo.getQueueById = origGetQueueById;
+    queuesRepo.releaseLock = origReleaseLock;
+    queuesRepo.getQueueState = origGetQueueState;
+    slackApi.updateMessage = origUpdateMessage;
+    slackApi.postMessage = origPostMessage;
+    workspacesRepo.findBySlackTeamId = origFindWorkspace;
+    if (origEnv !== undefined) Deno.env.set("QUEUE_APP_BOT_TOKEN", origEnv);
+    else Deno.env.delete("QUEUE_APP_BOT_TOKEN");
+  }
+});
+
 Deno.test("queue-app: events /slack/events handles url_verification and app_home_opened", async () => {
   let homePublished = false;
   const origFindWorkspace = workspacesRepo.findBySlackTeamId;

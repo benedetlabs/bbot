@@ -201,16 +201,22 @@ Deno.test("slack-kit: queue and todo card builders", () => {
   });
   assertEquals(queueCard.blocks.length, 4);
 
-  // Public queue card now has exactly 2 clean buttons: Join Queue and My Actions
+  // Public queue card now has Join, Done / Leave, and native Actions dropdown menu
   const queueActions = queueCard.blocks[3] as {
     type: string;
-    elements: { action_id: string }[];
+    elements: {
+      action_id: string;
+      options?: { text: { text: string }; value: string }[];
+    }[];
   };
-  assertEquals(queueActions.elements.length, 2);
+  assertEquals(queueActions.elements.length, 3);
   assertEquals(queueActions.elements[0].action_id, "queue_join_click");
-  assertEquals(queueActions.elements[1].action_id, "queue_my_actions_click");
+  assertEquals(queueActions.elements[1].action_id, "queue_done_click");
+  assertEquals(queueActions.elements[2].action_id, "queue_actions_select");
+  // Default (allowSecret=false) dropdown has 3 options: extend, stats, config
+  assertEquals(queueActions.elements[2].options?.length, 3);
 
-  // Even with allowSecret=true, public card stays clean with 2 buttons (secret button is in ephemeral actions)
+  // With allowSecret=true, dropdown has 4 options (includes Attach Secret)
   const queueCardWithSecret = buildQueueCard({
     channelName: "deploy-prod",
     queueId: "q-123",
@@ -221,9 +227,20 @@ Deno.test("slack-kit: queue and todo card builders", () => {
   });
   const queueActionsWithSecret = queueCardWithSecret.blocks[2] as {
     type: string;
-    elements: { action_id: string }[];
+    elements: {
+      action_id: string;
+      options?: { text: { text: string }; value: string }[];
+    }[];
   };
-  assertEquals(queueActionsWithSecret.elements.length, 2);
+  assertEquals(queueActionsWithSecret.elements.length, 3);
+  assertEquals(queueActionsWithSecret.elements[0].action_id, "queue_join_click");
+  assertEquals(queueActionsWithSecret.elements[1].action_id, "queue_done_click");
+  assertEquals(queueActionsWithSecret.elements[2].action_id, "queue_actions_select");
+  assertEquals(queueActionsWithSecret.elements[2].options?.length, 4);
+  assertEquals(
+    queueActionsWithSecret.elements[2].options?.some((o) => o.value === "secret:q-123"),
+    true,
+  );
 
   // Ephemeral user actions test: active holder with admin and secret enabled
   const activeUserActions = buildQueueUserActionsEphemeral({
