@@ -292,6 +292,25 @@ Deno.test("slack-kit: queue and todo card builders", () => {
     warningActions.elements.some((e) =>
       e.action_id === "queue_attach_secret_click"
     ),
+    false, // By default allowSecret is false -> no secret button
+  );
+
+  // When allowSecret is true -> secret button is present
+  const warningMsgWithSecret = buildQueueTimeoutWarningMessage({
+    channelName: "deploy-prod",
+    holderUserId: "U10",
+    minutesRemaining: 5,
+    waitingCount: 1,
+    allowSecret: true,
+  });
+  const actionsWithSecret = warningMsgWithSecret.blocks[1] as {
+    type: string;
+    elements: { action_id: string }[];
+  };
+  assertEquals(
+    actionsWithSecret.elements.some((e) =>
+      e.action_id === "queue_attach_secret_click"
+    ),
     true,
   );
 

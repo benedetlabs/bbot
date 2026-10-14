@@ -265,6 +265,7 @@ export async function processOutboxEvent(
         let waitingCount = 0;
         let nextWaiterUserId: string | null = null;
         let minsLeft = minutesRemaining ?? 5;
+        let allowSecret = false;
 
         // Query live queue state to ensure user is still active and gather up-to-date waiter info
         try {
@@ -289,6 +290,15 @@ export async function processOutboxEvent(
           }
           waitingCount = state.waitingLine.length;
           nextWaiterUserId = state.waitingLine[0]?.slack_user_id ?? null;
+          allowSecret = state.queue.allow_secret;
+
+          // Smart Warning: If no one is waiting in line, do not disrupt the holder
+          if (waitingCount === 0) {
+            console.log(
+              `[${WORKER_ID}] No teammates waiting in line for queue ${queueId}; skipping warning to avoid disruption.`,
+            );
+            break;
+          }
         } catch {
           // If state query fails (e.g. mock DB in test), proceed with payload defaults
         }
@@ -303,6 +313,7 @@ export async function processOutboxEvent(
             minutesRemaining: minsLeft,
             waitingCount,
             nextWaiterUserId,
+            allowSecret,
           });
 
           // Attempt ephemeral dispatch first
@@ -353,12 +364,24 @@ export async function processOutboxEvent(
         if (expireRes.status === "expired" && channelId) {
           const botToken = await resolveBotToken(event.workspace_id, "queue");
           if (botToken) {
-            await slackApi.postMessage(botToken, channelId, {
-              response_type: "in_channel",
-              text: `⌛ Active hold for <@${holderUserId}> on #${
-                channelName ?? "queue"
-              } expired automatically and was released.`,
-            });
+            // Only post public message in channel if there is a next person waiting in line
+            if (expireRes.promotedEntry) {
+              await slackApi.postMessage(botToken, channelId, {
+                response_type: "in_channel",
+                text:
+                  `⌛ O tempo de posse de <@${holderUserId}> em #${channelName ?? "queue"} expirou. 🚀 <@${expireRes.promotedEntry.slack_user_id}> assumiu a vez na fila!`,
+              });
+
+              // Direct DM alert to the newly promoted user
+              slackApi.postMessage(
+                botToken,
+                expireRes.promotedEntry.slack_user_id,
+                {
+                  text:
+                    `🚀 Você assumiu o topo da fila em <#${channelId}>! Seu acesso está liberado.`,
+                },
+              ).catch(() => {});
+            }
 
             // Update in-place live sticky queue card
             try {

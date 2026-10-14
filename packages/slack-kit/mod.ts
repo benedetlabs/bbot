@@ -979,62 +979,68 @@ export function buildQueueTimeoutWarningMessage(params: {
   minutesRemaining: number;
   waitingCount: number;
   nextWaiterUserId?: string | null;
+  allowSecret?: boolean;
 }): SlackBlockMessagePayload {
   const waiterText = params.nextWaiterUserId
-    ? ` and <@${params.nextWaiterUserId}> is waiting in line`
+    ? ` e <@${params.nextWaiterUserId}> está aguardando na fila`
     : (params.waitingCount > 0
-      ? ` and ${params.waitingCount} teammate(s) waiting`
+      ? ` e ${params.waitingCount} colega(s) aguardando na fila`
       : "");
+
+  const elements: Record<string, unknown>[] = [
+    {
+      type: "button",
+      action_id: "queue_extend_click",
+      text: {
+        type: "plain_text",
+        text: "⏱️ Estender +15m",
+        emoji: true,
+      },
+      style: "primary",
+      value: params.queueId ?? params.channelName,
+    },
+    {
+      type: "button",
+      action_id: "queue_done_click",
+      text: {
+        type: "plain_text",
+        text: "✅ Liberar Vaga",
+        emoji: true,
+      },
+      value: params.queueId ?? params.channelName,
+    },
+  ];
+
+  if (params.allowSecret) {
+    elements.push({
+      type: "button",
+      action_id: "queue_attach_secret_click",
+      text: {
+        type: "plain_text",
+        text: "🔐 Anexar Segredo Efêmero",
+        emoji: true,
+      },
+      value: params.queueId ?? params.channelName,
+    });
+  }
 
   return {
     response_type: "ephemeral",
     text:
-      `⏳ Your lock on #${params.channelName} expires in ${params.minutesRemaining} minutes!`,
+      `⏳ Seu tempo de posse em #${params.channelName} expira em ${params.minutesRemaining} minutos!`,
     blocks: [
       {
         type: "section",
         text: {
           type: "mrkdwn",
           text:
-            `⏳ *Your lock on #${params.channelName} expires in ${params.minutesRemaining} minutes*${waiterText}.\nNeed more time?`,
+            `⏳ *Seu tempo de posse em #${params.channelName} expira em ${params.minutesRemaining} minutos*${waiterText}.\nPrecisa de mais tempo?`,
         },
       },
       {
         type: "actions",
         block_id: "queue_warning_actions",
-        elements: [
-          {
-            type: "button",
-            action_id: "queue_extend_click",
-            text: {
-              type: "plain_text",
-              text: "⏱️ Extend +15m",
-              emoji: true,
-            },
-            style: "primary",
-            value: params.queueId ?? params.channelName,
-          },
-          {
-            type: "button",
-            action_id: "queue_done_click",
-            text: {
-              type: "plain_text",
-              text: "✅ Done / Release",
-              emoji: true,
-            },
-            value: params.queueId ?? params.channelName,
-          },
-          {
-            type: "button",
-            action_id: "queue_attach_secret_click",
-            text: {
-              type: "plain_text",
-              text: "🔐 Anexar Segredo Efêmero",
-              emoji: true,
-            },
-            value: params.queueId ?? params.channelName,
-          },
-        ],
+        elements,
       },
     ],
   };
