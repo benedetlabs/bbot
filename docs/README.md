@@ -6,6 +6,7 @@ Validação feita em 14 out 2026 (America/Sao_Paulo).
 |-----------|----------|
 | [VALIDACAO_MERCADO.md](./VALIDACAO_MERCADO.md) | Mercado, concorrentes, preço sugerido, regras do Slack Marketplace |
 | [REVISAO_TECNICA.md](./REVISAO_TECNICA.md) | Revisão somente leitura do monorepo (segurança, OAuth, billing, 3s ack) |
+| [PRD_GATEKEEP.md](./PRD_GATEKEEP.md) | Gatekeep: PRD + design técnico (aprovação humana p/ agentes de IA no Slack; MCP/API/SDKs, binding por hash, integração Secret/Queue/Todo) |
 
 ## Veredito rápido
 
