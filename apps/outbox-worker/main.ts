@@ -11,6 +11,7 @@ import {
 } from "@suite/outbox";
 import {
   closeDb,
+  gatekeepRepo,
   getSqlWrite,
   installationsRepo,
   kv,
@@ -18,6 +19,9 @@ import {
   type SecretKVPayload,
 } from "@suite/db";
 import {
+  buildGatekeepDecidedCard,
+  buildGatekeepExecutedCard,
+  buildGatekeepPendingCard,
   buildQueuePromotionMessage,
   buildQueueTimeoutWarningMessage,
   buildTodoCompletedNotificationMessage,
@@ -435,6 +439,178 @@ export async function processOutboxEvent(
                 res.error ?? "unknown error"
               }`,
             );
+          }
+        }
+      }
+      break;
+    }
+
+    // ========================================================================
+    // GATEKEEP EVENTS
+    // ========================================================================
+    case "gatekeep.post_card": {
+      const { requestId, agentName, channelId } = event.payload as {
+        requestId?: string;
+        agentName?: string;
+        channelId?: string;
+      };
+      if (requestId) {
+        const fullReq = await gatekeepRepo.getRequestById(requestId);
+        if (fullReq && fullReq.request.status === "pending") {
+          const targetChannel = channelId ?? fullReq.request.slack_channel_id;
+          if (targetChannel) {
+            const botToken = await resolveBotToken(event.workspace_id, "gatekeep");
+            if (botToken) {
+              const card = buildGatekeepPendingCard({
+                publicId: fullReq.request.public_id,
+                action: fullReq.request.action,
+                target: fullReq.request.target,
+                risk: fullReq.request.risk,
+                gate: fullReq.request.gate,
+                agentName: agentName ?? "Agent",
+                onBehalfOfUserId: fullReq.request.on_behalf_of_slack_user_id,
+                justification: fullReq.request.justification,
+                paramsHash: fullReq.currentRevision.params_hash,
+                expiresAt: fullReq.request.expires_at,
+              });
+
+              const res = await slackApi.postMessage(botToken, targetChannel, card);
+              if (!res.ok) {
+                throw new Error(
+                  `Slack chat.postMessage failed for gatekeep: ${res.error ?? "unknown"}`,
+                );
+              }
+              if (res.ts) {
+                await gatekeepRepo.updateCardLocation(
+                  fullReq.request.id,
+                  targetChannel,
+                  res.ts,
+                );
+              }
+            }
+          }
+        }
+      }
+      break;
+    }
+
+    case "gatekeep.card_update": {
+      const {
+        requestId,
+        decision,
+        decidedByUserId,
+        decisionNote,
+        executionStatus,
+        executionSummary,
+        executionDurationMs,
+      } = event.payload as {
+        requestId?: string;
+        decision?: string;
+        decidedByUserId?: string;
+        decisionNote?: string;
+        executionStatus?: "succeeded" | "failed";
+        executionSummary?: string;
+        executionDurationMs?: number;
+      };
+
+      if (requestId) {
+        const fullReq = await gatekeepRepo.getRequestById(requestId);
+        if (
+          fullReq && fullReq.request.slack_channel_id &&
+          fullReq.request.slack_message_ts
+        ) {
+          const botToken = await resolveBotToken(event.workspace_id, "gatekeep");
+          if (botToken) {
+            let card: SlackMessagePayload;
+            if (executionStatus) {
+              card = buildGatekeepExecutedCard({
+                publicId: fullReq.request.public_id,
+                action: fullReq.request.action,
+                target: fullReq.request.target,
+                risk: fullReq.request.risk,
+                gate: fullReq.request.gate,
+                agentName: "Agent",
+                paramsHash: fullReq.currentRevision.params_hash,
+                expiresAt: fullReq.request.expires_at,
+                executionStatus,
+                executionSummary,
+                executionDurationMs,
+              });
+            } else {
+              card = buildGatekeepDecidedCard({
+                publicId: fullReq.request.public_id,
+                action: fullReq.request.action,
+                target: fullReq.request.target,
+                risk: fullReq.request.risk,
+                gate: fullReq.request.gate,
+                agentName: "Agent",
+                paramsHash: fullReq.currentRevision.params_hash,
+                expiresAt: fullReq.request.expires_at,
+                decision,
+                decidedByUserId,
+                decisionNote,
+              });
+            }
+
+            const res = await slackApi.updateMessage(
+              botToken,
+              fullReq.request.slack_channel_id,
+              fullReq.request.slack_message_ts,
+              card,
+            );
+            if (!res.ok) {
+              throw new Error(
+                `Slack chat.update failed for gatekeep: ${res.error ?? "unknown"}`,
+              );
+            }
+          }
+        }
+      }
+      break;
+    }
+
+    case "gatekeep.expire": {
+      const { requestId } = event.payload as { requestId?: string };
+      if (requestId) {
+        const fullReq = await gatekeepRepo.getRequestById(requestId);
+        if (
+          fullReq &&
+          (fullReq.request.status === "pending" ||
+            fullReq.request.status === "needs_info")
+        ) {
+          await gatekeepRepo.recordDecision({
+            requestId: fullReq.request.id,
+            revision: fullReq.request.current_revision,
+            stage: 0,
+            decision: "policy_deny",
+            paramsHash: fullReq.currentRevision.params_hash,
+            targetStatus: "expired",
+          });
+
+          if (
+            fullReq.request.slack_channel_id &&
+            fullReq.request.slack_message_ts
+          ) {
+            const botToken = await resolveBotToken(event.workspace_id, "gatekeep");
+            if (botToken) {
+              const card = buildGatekeepDecidedCard({
+                publicId: fullReq.request.public_id,
+                action: fullReq.request.action,
+                target: fullReq.request.target,
+                risk: fullReq.request.risk,
+                gate: fullReq.request.gate,
+                agentName: "Agent",
+                paramsHash: fullReq.currentRevision.params_hash,
+                expiresAt: fullReq.request.expires_at,
+                decision: "expired",
+              });
+              await slackApi.updateMessage(
+                botToken,
+                fullReq.request.slack_channel_id,
+                fullReq.request.slack_message_ts,
+                card,
+              );
+            }
           }
         }
       }

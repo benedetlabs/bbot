@@ -6,7 +6,7 @@
 
 import type { Sql } from "postgres";
 
-export type OutboxAppSource = "secret" | "queue" | "todo" | "billing";
+export type OutboxAppSource = "secret" | "queue" | "todo" | "billing" | "gatekeep";
 
 export type OutboxStatus =
   | "pending"

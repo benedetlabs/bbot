@@ -53,6 +53,12 @@ variable "projects" {
       signing_secret = ""
       bot_token      = ""
     }
+    "gatekeep-app" = {
+      enabled        = false
+      replicas       = 2
+      signing_secret = ""
+      bot_token      = ""
+    }
   }
 }
 

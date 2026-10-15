@@ -2111,3 +2111,5 @@ export const slackApi: SlackApiClient = {
     return await res.json();
   },
 };
+
+export * from "./gatekeep_blocks.ts";

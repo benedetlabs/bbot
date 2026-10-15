@@ -182,4 +182,24 @@ Deno.test("db: migration file exists and contains valid schema statements", asyn
   assertEquals(ddl.includes("CREATE TABLE IF NOT EXISTS queue_entries"), true);
   assertEquals(ddl.includes("CREATE TABLE IF NOT EXISTS todos"), true);
   assertEquals(ddl.includes("CREATE PUBLICATION pgcache_suite_pub"), true);
+
+  const ddl003 = await Deno.readTextFile(
+    "./packages/db/migrations/003_gatekeep.sql",
+  );
+  assertEquals(
+    ddl003.includes("CREATE TABLE IF NOT EXISTS gatekeep_agents"),
+    true,
+  );
+  assertEquals(
+    ddl003.includes("CREATE TABLE IF NOT EXISTS gatekeep_requests"),
+    true,
+  );
+  assertEquals(
+    ddl003.includes("CREATE TABLE IF NOT EXISTS gatekeep_approval_tokens"),
+    true,
+  );
+  assertEquals(
+    ddl003.includes("CREATE TABLE IF NOT EXISTS gatekeep_audit_events"),
+    true,
+  );
 });

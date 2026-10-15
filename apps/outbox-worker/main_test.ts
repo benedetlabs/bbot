@@ -7,7 +7,7 @@ Deno.env.set(
 );
 import type { OutboxEventRecord } from "@suite/outbox";
 import { slackApi } from "@suite/slack-kit";
-import { kv, queuesRepo, setCustomSql } from "@suite/db";
+import { gatekeepRepo, kv, queuesRepo, setCustomSql } from "@suite/db";
 import type { Sql } from "postgres";
 
 Deno.test("outbox-worker: processes secret.burned_card_update and calls slackApi.updateMessage", async () => {
@@ -632,5 +632,154 @@ Deno.test("outbox-worker: processes todo.completed_notification and dispatches m
     slackApi.postMessage = origPost;
     if (origEnv !== undefined) Deno.env.set("TODO_APP_BOT_TOKEN", origEnv);
     else Deno.env.delete("TODO_APP_BOT_TOKEN");
+  }
+});
+
+Deno.test("outbox-worker: processes gatekeep events cleanly", async () => {
+  let postCalled = false;
+  let updateCalled = false;
+  const origPost = slackApi.postMessage;
+  const origUpdate = slackApi.updateMessage;
+  const origGetReq = gatekeepRepo.getRequestById;
+  const origUpdateCardLoc = gatekeepRepo.updateCardLocation;
+  const origRecordDec = gatekeepRepo.recordDecision;
+  const origEnv = Deno.env.get("GATEKEEP_APP_BOT_TOKEN");
+  Deno.env.set("GATEKEEP_APP_BOT_TOKEN", "xoxb-gatekeep-worker-token");
+
+  try {
+    slackApi.postMessage = ((token, channelId, message) => {
+      postCalled = true;
+      return Promise.resolve({ ok: true, ts: "1700000000.111111" });
+    }) as typeof slackApi.postMessage;
+
+    slackApi.updateMessage = ((token, channelId, ts, message) => {
+      updateCalled = true;
+      return Promise.resolve({ ok: true, ts });
+    }) as typeof slackApi.updateMessage;
+
+    gatekeepRepo.getRequestById = ((id: string) => {
+      return Promise.resolve({
+        request: {
+          id,
+          public_id: "gk_req_mock_1",
+          workspace_id: "00000000-0000-0000-0000-000000000001",
+          agent_id: "agt-1",
+          idempotency_key: null,
+          action: "deploy.k8s",
+          target: "env:staging",
+          status: "pending",
+          current_revision: 1,
+          risk: "medium",
+          gate: "soft",
+          policy_version: 1,
+          matched_rule_ids: [],
+          evaluation: {},
+          on_behalf_of_slack_user_id: null,
+          justification: null,
+          callback_url: null,
+          slack_channel_id: "C_DEV",
+          slack_message_ts: "1700000000.111111",
+          card_version: 0,
+          queue_id: null,
+          queue_entry_id: null,
+          todo_id: null,
+          expires_at: new Date(),
+          decided_at: null,
+          executed_at: null,
+          created_at: new Date(),
+          updated_at: new Date(),
+        },
+        currentRevision: {
+          id: "rev-1",
+          request_id: id,
+          revision: 1,
+          params_enc: new Uint8Array([1]),
+          params_hash: "hash_gk_test",
+          params_schema: null,
+          editable: [],
+          display: null,
+          preview_enc: null,
+          preview_hash: null,
+          secret_refs: [],
+          created_by: "agent:agt-1",
+          created_at: new Date(),
+        },
+        revisions: [],
+        decisions: [],
+        execution: null,
+      });
+    }) as typeof gatekeepRepo.getRequestById;
+
+    gatekeepRepo.updateCardLocation = (() => Promise.resolve()) as typeof gatekeepRepo.updateCardLocation;
+    gatekeepRepo.recordDecision = (() =>
+      Promise.resolve({ success: true })) as typeof gatekeepRepo.recordDecision;
+
+    // 1. gatekeep.post_card
+    const postEvent: OutboxEventRecord = {
+      id: "gk-evt-1",
+      workspace_id: "00000000-0000-0000-0000-000000000001",
+      app_source: "gatekeep",
+      event_type: "gatekeep.post_card",
+      payload: {
+        requestId: "req-1",
+        channelId: "C_DEV",
+      },
+      attempts: 1,
+      max_attempts: 5,
+      created_at: new Date(),
+    };
+
+    await processOutboxEvent(postEvent);
+    assertEquals(postCalled, true);
+
+    // 2. gatekeep.card_update
+    const updateEvent: OutboxEventRecord = {
+      id: "gk-evt-2",
+      workspace_id: "00000000-0000-0000-0000-000000000001",
+      app_source: "gatekeep",
+      event_type: "gatekeep.card_update",
+      payload: {
+        requestId: "req-1",
+        decision: "approved",
+        decidedByUserId: "U_LEO",
+      },
+      attempts: 1,
+      max_attempts: 5,
+      created_at: new Date(),
+    };
+
+    await processOutboxEvent(updateEvent);
+    assertEquals(updateCalled, true);
+
+    // 3. gatekeep.expire
+    let expireUpdated = false;
+    slackApi.updateMessage = (() => {
+      expireUpdated = true;
+      return Promise.resolve({ ok: true, ts: "1700000000.111111" });
+    }) as typeof slackApi.updateMessage;
+
+    const expireEvent: OutboxEventRecord = {
+      id: "gk-evt-3",
+      workspace_id: "00000000-0000-0000-0000-000000000001",
+      app_source: "gatekeep",
+      event_type: "gatekeep.expire",
+      payload: {
+        requestId: "req-1",
+      },
+      attempts: 1,
+      max_attempts: 5,
+      created_at: new Date(),
+    };
+
+    await processOutboxEvent(expireEvent);
+    assertEquals(expireUpdated, true);
+  } finally {
+    slackApi.postMessage = origPost;
+    slackApi.updateMessage = origUpdate;
+    gatekeepRepo.getRequestById = origGetReq;
+    gatekeepRepo.updateCardLocation = origUpdateCardLoc;
+    gatekeepRepo.recordDecision = origRecordDec;
+    if (origEnv !== undefined) Deno.env.set("GATEKEEP_APP_BOT_TOKEN", origEnv);
+    else Deno.env.delete("GATEKEEP_APP_BOT_TOKEN");
   }
 });

@@ -1,0 +1,37 @@
+display_information:
+  name: "Gatekeep"
+  description: "Approve your AI agents' risky actions from Slack."
+  background_color: "#0F172A"
+  long_description: "Gatekeep is the human-in-the-loop approval layer for AI agents, CI/CD pipelines, and automations. Approve deployments, database migrations, refunds, and sensitive actions directly from Slack with cryptographic hash binding (RFC 8785) and single-use execution tokens."
+
+features:
+  bot_user:
+    display_name: "Gatekeep"
+    always_online: true
+  slash_commands:
+    - command: "/gatekeep"
+      url: "https://gatekeep.bsuit.app/slack/commands"
+      description: "Gatekeep AI agent approval control plane"
+      usage_hint: "[status|help]"
+      should_escape: false
+
+oauth_config:
+  redirect_urls:
+    - "https://gatekeep.bsuit.app/slack/oauth/callback"
+  scopes:
+    bot:
+      - commands
+      - chat:write
+      - chat:write.public
+      - im:write
+
+settings:
+  event_subscriptions:
+    request_url: "https://gatekeep.bsuit.app/slack/events"
+    bot_events:
+      - app_home_opened
+      - app_uninstalled
+      - tokens_revoked
+  interactivity:
+    is_enabled: true
+    request_url: "https://gatekeep.bsuit.app/slack/interactions"

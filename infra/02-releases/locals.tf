@@ -20,11 +20,13 @@ locals {
     "packages/db",
     "packages/outbox",
     "packages/slack-kit",
+    "packages/gatekeep-core",
   ]
   image_source_dirs = {
     "secret-app"    = ["apps/secret-app"]
     "queue-app"     = ["apps/queue-app"]
     "todo-app"      = ["apps/todo-app"]
+    "gatekeep-app"  = ["apps/gatekeep-app"]
     "outbox-worker" = ["apps/outbox-worker", "apps/queue-app"]
   }
   shared_build_files = [

@@ -16,6 +16,11 @@ import {
   buildTodoCompletedNotificationMessage,
   buildTodoHomeView,
   buildTodoModal,
+  buildGatekeepPendingCard,
+  buildGatekeepDecidedCard,
+  buildGatekeepExecutedCard,
+  buildGatekeepRejectModal,
+  type SlackBlock,
   slackApi,
   slackModalClear,
   slackModalErrors,
@@ -683,4 +688,58 @@ Deno.test("slack-kit: buildTodoCompletedNotificationMessage formats accountabili
 
   assertEquals(notif.text?.includes("Fix production bug"), true);
   assertEquals(notif.blocks.length, 1);
+});
+
+Deno.test("slack-kit: Gatekeep card and modal builders generate compliant Block Kit structures", () => {
+  const pendingCard = buildGatekeepPendingCard({
+    publicId: "gk_req_test123",
+    action: "stripe.refund.create",
+    target: "acct_live",
+    risk: "critical",
+    gate: "hard",
+    agentName: "RefundBot",
+    paramsHash: "h_xyz789",
+    paramsSummary: '{"amount_cents":50000}',
+    expiresAt: new Date(Date.now() + 1800000),
+  });
+
+  assertEquals(pendingCard.text?.includes("Approval required"), true);
+  assertEquals((pendingCard.blocks ?? []).length >= 5, true);
+  const actionsBlock = (pendingCard.blocks ?? []).find((b: SlackBlock) => b.type === "actions");
+  assertEquals(actionsBlock !== undefined, true);
+  assertEquals(actionsBlock?.elements?.length, 4);
+
+  const decidedCard = buildGatekeepDecidedCard({
+    publicId: "gk_req_test123",
+    action: "stripe.refund.create",
+    risk: "critical",
+    gate: "hard",
+    agentName: "RefundBot",
+    paramsHash: "h_xyz789",
+    expiresAt: new Date(),
+    decision: "approved",
+    decidedByUserId: "U_ALICE",
+  });
+  assertEquals(decidedCard.text?.includes("Approved by <@U_ALICE>"), true);
+
+  const executedCard = buildGatekeepExecutedCard({
+    publicId: "gk_req_test123",
+    action: "stripe.refund.create",
+    risk: "critical",
+    gate: "hard",
+    agentName: "RefundBot",
+    paramsHash: "h_xyz789",
+    expiresAt: new Date(),
+    executionStatus: "succeeded",
+    executionDurationMs: 1250,
+    executionSummary: "Refund processed",
+  });
+  assertEquals(executedCard.text?.includes("Executed in 1.3s"), true);
+
+  const rejectModal = buildGatekeepRejectModal({
+    publicId: "gk_req_test123",
+    paramsHash: "h_xyz789",
+  });
+  assertEquals(rejectModal.type, "modal");
+  assertEquals(rejectModal.callback_id, "gk_reject_modal_submit");
 });

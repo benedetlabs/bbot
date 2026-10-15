@@ -25,6 +25,12 @@ projects = {
     signing_secret = ""
     bot_token      = ""
   }
+  "gatekeep-app" = {
+    enabled        = false # Ative para compilar e publicar o Gatekeep
+    replicas       = 2
+    signing_secret = "SEU_GATEKEEP_SIGNING_SECRET"
+    bot_token      = "xoxb-SEU_GATEKEEP_BOT_TOKEN"
+  }
 }
 
 worker = {
