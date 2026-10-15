@@ -1,0 +1,8 @@
+{
+  "name": "@suite/gatekeep-mcp",
+  "version": "1.0.0",
+  "exports": {
+    ".": "./mod.ts",
+    "./cli": "./cli.ts"
+  }
+}

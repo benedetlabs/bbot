@@ -21,6 +21,8 @@ locals {
     "packages/outbox",
     "packages/slack-kit",
     "packages/gatekeep-core",
+    "packages/gatekeep-sdk",
+    "packages/gatekeep-mcp",
   ]
   image_source_dirs = {
     "secret-app"    = ["apps/secret-app"]

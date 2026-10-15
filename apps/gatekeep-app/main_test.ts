@@ -356,3 +356,86 @@ Deno.test("gatekeep-app: POST /slack/interactions handles gk_approve_click", asy
 
   assertEquals(res.status, 200);
 });
+
+Deno.test("gatekeep-app: POST /v1/requests/:id/context handles agent response", async () => {
+  gatekeepRepo.answerContext = (() =>
+    Promise.resolve({ success: true })) as typeof gatekeepRepo.answerContext;
+
+  const res = await app.request("/v1/requests/gk_req_01ABC/context", {
+    method: "POST",
+    headers: {
+      "Authorization": TEST_AUTH_HEADER,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      answer: "Replicas can be safely scaled to 3 for maintenance window",
+    }),
+  });
+
+  assertEquals(res.status, 200);
+  const data = await res.json();
+  assertEquals(data.ok, true);
+  assertEquals(data.status, "pending");
+});
+
+Deno.test("gatekeep-app: POST /v1/requests/:id/cancel cancels request", async () => {
+  gatekeepRepo.cancelRequest = (() =>
+    Promise.resolve({ success: true })) as typeof gatekeepRepo.cancelRequest;
+
+  const res = await app.request("/v1/requests/gk_req_01ABC/cancel", {
+    method: "POST",
+    headers: {
+      "Authorization": TEST_AUTH_HEADER,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      reason: "Deploy superseded by commit b2c3d4",
+    }),
+  });
+
+  assertEquals(res.status, 200);
+  const data = await res.json();
+  assertEquals(data.ok, true);
+  assertEquals(data.status, "cancelled");
+});
+
+Deno.test("gatekeep-app: POST /slack/events handles url_verification challenge", async () => {
+  const payload = {
+    type: "url_verification",
+    challenge: "gatekeep_challenge_token_999",
+  };
+  const body = JSON.stringify(payload);
+  const headers = await createSignedHeaders(body, getSigningSecret(), "application/json");
+
+  const res = await app.request("/slack/events", {
+    method: "POST",
+    headers,
+    body,
+  });
+
+  assertEquals(res.status, 200);
+  const data = await res.json();
+  assertEquals(data.challenge, "gatekeep_challenge_token_999");
+});
+
+Deno.test("gatekeep-app: POST /mcp handles remote MCP protocol messages", async () => {
+  const rpcPayload = {
+    jsonrpc: "2.0",
+    id: "mcp-test-1",
+    method: "initialize",
+  };
+
+  const res = await app.request("/mcp", {
+    method: "POST",
+    headers: {
+      "Authorization": TEST_AUTH_HEADER,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(rpcPayload),
+  });
+
+  assertEquals(res.status, 200);
+  const data = await res.json();
+  assertEquals(data.id, "mcp-test-1");
+  assertEquals(data.result.serverInfo.name, "gatekeep-mcp");
+});

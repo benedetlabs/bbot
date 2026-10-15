@@ -5,6 +5,7 @@
 
 import { Hono } from "hono";
 import {
+  canonicalizeJson,
   computeCanonicalHash,
   evaluatePolicy,
   type GatekeepPolicyDocument,
@@ -29,8 +30,11 @@ import {
 } from "@suite/db";
 import { cancelOutboxEvents, enqueueOutboxEvent } from "@suite/outbox";
 import {
+  buildGatekeepAskModal,
   buildGatekeepDecidedCard,
+  buildGatekeepEditModal,
   buildGatekeepExecutedCard,
+  buildGatekeepHomeView,
   buildGatekeepPendingCard,
   buildGatekeepRejectModal,
   requireNonEmptyEnv,
@@ -39,6 +43,7 @@ import {
   slackSignatureMiddleware,
   timingSafeEqualString,
 } from "@suite/slack-kit";
+import { GatekeepMcpHandler, type McpJsonRpcRequest } from "@suite/gatekeep-mcp";
 
 export const app = new Hono();
 
@@ -401,6 +406,154 @@ app.post("/v1/requests/:id/receipt", async (c) => {
   });
 });
 
+/**
+ * POST /v1/requests/:id/context
+ * Allows the agent to provide clarifying context/answer to an approver's question.
+ */
+app.post("/v1/requests/:id/context", async (c) => {
+  const agent = await authenticateAgent(c.req.header("Authorization"));
+  if (!agent) {
+    return c.json({ error: "Unauthorized: Invalid or missing API key" }, 401);
+  }
+
+  const publicId = c.req.param("id");
+  const fullReq = await gatekeepRepo.getRequestByPublicId(publicId);
+  if (!fullReq) {
+    return c.json({ error: "Request not found" }, 404);
+  }
+
+  let body: { answer?: string };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Invalid JSON body" }, 400);
+  }
+
+  if (!body.answer || typeof body.answer !== "string") {
+    return c.json({ error: "Field 'answer' is required and must be a string" }, 400);
+  }
+
+  const result = await gatekeepRepo.answerContext({
+    requestId: fullReq.request.id,
+    agentId: agent.id,
+    answer: body.answer,
+  });
+
+  if (!result.success) {
+    return c.json({ error: result.error ?? "Failed to provide context" }, 400);
+  }
+
+  // Update Slack card back to pending with notice of answer
+  await enqueueOutboxEvent(getSqlWrite(), {
+    workspaceId: agent.workspace_id,
+    appSource: "gatekeep",
+    eventType: "gatekeep.card_update",
+    payload: {
+      requestId: fullReq.request.id,
+      publicId: fullReq.request.public_id,
+      decision: "context_provided",
+      contextAnswer: body.answer,
+    },
+  });
+
+  return c.json({ ok: true, status: "pending" });
+});
+
+/**
+ * POST /v1/requests/:id/cancel
+ * Allows the requester agent to cancel a pending request.
+ */
+app.post("/v1/requests/:id/cancel", async (c) => {
+  const agent = await authenticateAgent(c.req.header("Authorization"));
+  if (!agent) {
+    return c.json({ error: "Unauthorized: Invalid or missing API key" }, 401);
+  }
+
+  const publicId = c.req.param("id");
+  const fullReq = await gatekeepRepo.getRequestByPublicId(publicId);
+  if (!fullReq) {
+    return c.json({ error: "Request not found" }, 404);
+  }
+
+  let body: { reason?: string } = {};
+  try {
+    body = await c.req.json();
+  } catch {
+    // optional body
+  }
+
+  const result = await gatekeepRepo.cancelRequest({
+    requestId: fullReq.request.id,
+    agentId: agent.id,
+    reason: body.reason,
+  });
+
+  if (!result.success) {
+    return c.json({ error: result.error ?? "Failed to cancel request" }, 400);
+  }
+
+  // Cancel scheduled expiration
+  await cancelOutboxEvents(getSqlWrite(), {
+    workspaceId: agent.workspace_id,
+    eventType: "gatekeep.expire",
+    filterPayloadKey: "requestId",
+    filterPayloadValue: fullReq.request.id,
+  });
+
+  // Update Slack card
+  await enqueueOutboxEvent(getSqlWrite(), {
+    workspaceId: agent.workspace_id,
+    appSource: "gatekeep",
+    eventType: "gatekeep.card_update",
+    payload: {
+      requestId: fullReq.request.id,
+      publicId: fullReq.request.public_id,
+      decision: "cancelled",
+      decisionNote: body.reason ?? "Cancelled by agent",
+    },
+  });
+
+  return c.json({ ok: true, status: "cancelled" });
+});
+
+/**
+ * POST /mcp & POST /gatekeep
+ * Remote Streamable HTTP MCP server endpoint for Gatekeep.
+ */
+app.post("/mcp", async (c) => {
+  const authHeader = c.req.header("Authorization");
+  const agent = await authenticateAgent(authHeader);
+  if (!agent) {
+    return c.json({
+      jsonrpc: "2.0",
+      id: null,
+      error: { code: -32001, message: "Unauthorized: Invalid or missing Gatekeep API key" },
+    }, 401);
+  }
+
+  let rpcReq: McpJsonRpcRequest;
+  try {
+    rpcReq = await c.req.json();
+  } catch {
+    return c.json({
+      jsonrpc: "2.0",
+      id: null,
+      error: { code: -32700, message: "Parse error" },
+    }, 400);
+  }
+
+  const apiKey = authHeader!.replace(/^Bearer\s+/i, "");
+  const baseUrl = Deno.env.get("GATEKEEP_PUBLIC_BASE_URL") ?? "https://gatekeep.bsuit.app";
+  const handler = new GatekeepMcpHandler({ baseUrl, apiKey });
+
+  const rpcRes = await handler.handleMessage(rpcReq);
+  if (rpcRes === null) {
+    return c.body(null, 204);
+  }
+  return c.json(rpcRes);
+});
+app.post("/gatekeep", (c) => app.fetch(new Request(new URL("/mcp", c.req.url).toString(), c.req.raw)));
+
 // ============================================================================
 // 3. SLACK INTERACTION ENDPOINT
 // ============================================================================
@@ -506,6 +659,64 @@ app.post(
         }
         return c.body(null, 200);
       }
+
+      // Handle gk_edit_click
+      if (actionId === "gk_edit_click") {
+        if (payload.trigger_id) {
+          const install = await installationsRepo.findInstallation(
+            payload.team?.id ?? "",
+            "gatekeep",
+          );
+          if (install) {
+            const masterKey = await importMasterKey(getMasterKeyHex());
+            const botToken = await decryptOAuthToken(
+              install.installation.bot_access_token_enc,
+              masterKey,
+            );
+            let currentParamsJson = "{}";
+            try {
+              const decrypted = await decryptOAuthToken(
+                fullReq.currentRevision.params_enc,
+                masterKey,
+              );
+              currentParamsJson = JSON.stringify(JSON.parse(decrypted), null, 2);
+            } catch {
+              // fallback
+            }
+
+            const modal = buildGatekeepEditModal({
+              publicId,
+              action: fullReq.request.action,
+              currentParamsJson,
+            });
+            slackApi.openView(botToken, payload.trigger_id, modal).catch(() => {});
+          }
+        }
+        return c.body(null, 200);
+      }
+
+      // Handle gk_ask_click
+      if (actionId === "gk_ask_click") {
+        if (payload.trigger_id) {
+          const install = await installationsRepo.findInstallation(
+            payload.team?.id ?? "",
+            "gatekeep",
+          );
+          if (install) {
+            const masterKey = await importMasterKey(getMasterKeyHex());
+            const botToken = await decryptOAuthToken(
+              install.installation.bot_access_token_enc,
+              masterKey,
+            );
+            const modal = buildGatekeepAskModal({
+              publicId,
+              action: fullReq.request.action,
+            });
+            slackApi.openView(botToken, payload.trigger_id, modal).catch(() => {});
+          }
+        }
+        return c.body(null, 200);
+      }
     }
 
     // 2. View Submission: Reject Modal Submit
@@ -555,12 +766,182 @@ app.post(
       return c.json(slackModalClear());
     }
 
+    // 3. View Submission: Edit Modal Submit
+    if (payload.type === "view_submission" && payload.view?.callback_id === "gk_edit_modal_submit") {
+      const metadata = JSON.parse(payload.view?.private_metadata ?? "{}");
+      const rawParams = payload.view?.state?.values?.params_block?.params_input?.value ?? "{}";
+      const note = payload.view?.state?.values?.note_block?.note_input?.value ?? null;
+      const publicId = metadata.public_id;
+
+      const fullReq = await gatekeepRepo.getRequestByPublicId(publicId);
+      if (fullReq && (fullReq.request.status === "pending" || fullReq.request.status === "needs_info")) {
+        let parsedParams: Record<string, unknown>;
+        try {
+          parsedParams = JSON.parse(rawParams);
+        } catch {
+          return c.json({
+            response_action: "errors",
+            errors: { params_block: "Invalid JSON format" },
+          });
+        }
+
+        const canonicalJson = canonicalizeJson(parsedParams);
+        const { hash: revisedParamsHash } = await computeCanonicalHash(canonicalJson);
+
+        const masterKey = await importMasterKey(getMasterKeyHex());
+        const revisedParamsEnc = await encryptOAuthToken(canonicalJson, masterKey);
+
+        const rawToken = `gkt_${bytesToHex(generateRandomBytes(24))}`;
+        const tokenHash = new Uint8Array(
+          await crypto.subtle.digest("SHA-256", new TextEncoder().encode(rawToken)),
+        );
+
+        const editResult = await gatekeepRepo.createRevisionAndApprove({
+          requestId: fullReq.request.id,
+          slackUserId: payload.user?.id,
+          slackTeamId: payload.team?.id,
+          note,
+          paramsEnc: revisedParamsEnc,
+          paramsHash: revisedParamsHash,
+          createdBy: `slack:${payload.user?.id}`,
+          tokenHash,
+          tokenExpiresAt: new Date(Date.now() + 300000), // 5 min token TTL
+        });
+
+        if (editResult.success) {
+          // Cancel scheduled expire event
+          await cancelOutboxEvents(getSqlWrite(), {
+            workspaceId: fullReq.request.workspace_id,
+            eventType: "gatekeep.expire",
+            filterPayloadKey: "requestId",
+            filterPayloadValue: fullReq.request.id,
+          });
+
+          // Update card to edited
+          await enqueueOutboxEvent(getSqlWrite(), {
+            workspaceId: fullReq.request.workspace_id,
+            appSource: "gatekeep",
+            eventType: "gatekeep.card_update",
+            payload: {
+              requestId: fullReq.request.id,
+              publicId: fullReq.request.public_id,
+              decision: "edited",
+              decidedByUserId: payload.user?.id,
+              decisionNote: note,
+            },
+          });
+        }
+      }
+
+      return c.json(slackModalClear());
+    }
+
+    // 4. View Submission: Ask Context Submit
+    if (payload.type === "view_submission" && payload.view?.callback_id === "gk_ask_modal_submit") {
+      const metadata = JSON.parse(payload.view?.private_metadata ?? "{}");
+      const question = payload.view?.state?.values?.question_block?.question_input?.value ?? "";
+      const publicId = metadata.public_id;
+
+      const fullReq = await gatekeepRepo.getRequestByPublicId(publicId);
+      if (fullReq && fullReq.request.status === "pending") {
+        await gatekeepRepo.requestContext({
+          requestId: fullReq.request.id,
+          slackUserId: payload.user?.id,
+          slackTeamId: payload.team?.id,
+          question,
+        });
+
+        // Update card to needs_info
+        await enqueueOutboxEvent(getSqlWrite(), {
+          workspaceId: fullReq.request.workspace_id,
+          appSource: "gatekeep",
+          eventType: "gatekeep.card_update",
+          payload: {
+            requestId: fullReq.request.id,
+            publicId: fullReq.request.public_id,
+            decision: "needs_info",
+            decidedByUserId: payload.user?.id,
+            decisionNote: question,
+          },
+        });
+      }
+
+      return c.json(slackModalClear());
+    }
+
     return c.body(null, 200);
   },
 );
 
 // ============================================================================
-// 4. SLACK SLASH COMMAND ENDPOINT
+// 4. SLACK EVENTS ENDPOINT (app_home_opened & url_verification)
+// ============================================================================
+app.post(
+  "/slack/events",
+  slackSignatureMiddleware(getSigningSecret),
+  async (c) => {
+    let payload: Record<string, unknown>;
+    try {
+      payload = await c.req.json();
+    } catch {
+      return c.text("Invalid JSON", 400);
+    }
+
+    // 1. URL Verification Challenge
+    if (payload.type === "url_verification") {
+      return c.json({ challenge: payload.challenge });
+    }
+
+    // 2. App Home Opened Event
+    if (payload.type === "event_callback") {
+      const event = payload.event as { type?: string; user?: string } | undefined;
+      if (event?.type === "app_home_opened" && event.user) {
+        const teamId = (payload.team_id as string) ?? "";
+        const install = await installationsRepo.findInstallation(teamId, "gatekeep");
+        if (install) {
+          const masterKey = await importMasterKey(getMasterKeyHex());
+          const botToken = await decryptOAuthToken(
+            install.installation.bot_access_token_enc,
+            masterKey,
+          );
+
+          const pendingReqs = await gatekeepRepo.getPendingRequestsByWorkspace(
+            install.installation.workspace_id,
+            10,
+          );
+          const agents = await gatekeepRepo.listAgentsByWorkspace(
+            install.installation.workspace_id,
+          );
+          const currentMonth = new Date().toISOString().slice(0, 7);
+          const usage = await gatekeepRepo.getMonthlyUsage(
+            install.installation.workspace_id,
+            currentMonth,
+          );
+
+          const homeView = buildGatekeepHomeView({
+            workspaceId: install.installation.workspace_id,
+            pendingCount: pendingReqs.length,
+            agentsCount: agents.length,
+            monthlyRequests: usage?.requests_count ?? 0,
+            pendingRequests: pendingReqs.map((r) => ({
+              publicId: r.public_id,
+              action: r.action,
+              risk: r.risk,
+              expiresAt: new Date(r.expires_at),
+            })),
+          });
+
+          slackApi.publishView(botToken, event.user, homeView).catch(() => {});
+        }
+      }
+    }
+
+    return c.body(null, 200);
+  },
+);
+
+// ============================================================================
+// 5. SLACK SLASH COMMAND ENDPOINT
 // ============================================================================
 app.post(
   "/slack/commands",

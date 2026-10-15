@@ -743,4 +743,358 @@ export const gatekeepRepo = {
       return { success: true };
     });
   },
+
+  // ==========================================================================
+  // 7. EDIT REVISION & APPROVE
+  // ==========================================================================
+  async createRevisionAndApprove(
+    params: {
+      requestId: string;
+      slackUserId: string;
+      slackTeamId?: string | null;
+      note?: string | null;
+      paramsEnc: Uint8Array;
+      paramsHash: string;
+      createdBy: string;
+      tokenHash: Uint8Array;
+      tokenExpiresAt: Date;
+    },
+    customSql?: Sql,
+  ): Promise<{
+    success: boolean;
+    newRevision?: number;
+    paramsHash?: string;
+    jti?: string;
+    error?: string;
+  }> {
+    const sql = customSql ?? getSqlWrite();
+
+    return await sql.begin(async (tx) => {
+      // 1. Fetch request with lock
+      const reqs = await tx<GatekeepRequestRow[]>`
+        SELECT * FROM gatekeep_requests
+        WHERE id = ${params.requestId}
+        FOR UPDATE
+      `;
+      if (reqs.length === 0) return { success: false, error: "Request not found" };
+      const req = reqs[0];
+
+      if (req.status !== "pending" && req.status !== "needs_info") {
+        return { success: false, error: `Cannot edit request in status "${req.status}"` };
+      }
+
+      const newRevision = req.current_revision + 1;
+
+      // 2. Insert new revision
+      await tx`
+        INSERT INTO gatekeep_request_revisions (
+          request_id,
+          revision,
+          params_enc,
+          params_hash,
+          created_by
+        ) VALUES (
+          ${req.id},
+          ${newRevision},
+          ${params.paramsEnc},
+          ${params.paramsHash},
+          ${params.createdBy}
+        )
+      `;
+
+      // 3. Record decision
+      await tx`
+        INSERT INTO gatekeep_decisions (
+          request_id,
+          revision,
+          stage,
+          decision,
+          slack_user_id,
+          slack_team_id,
+          note,
+          params_hash
+        ) VALUES (
+          ${req.id},
+          ${newRevision},
+          0,
+          'edit_approve',
+          ${params.slackUserId},
+          ${params.slackTeamId ?? null},
+          ${params.note ?? null},
+          ${params.paramsHash}
+        )
+      `;
+
+      // 4. Update request status to edited
+      await tx`
+        UPDATE gatekeep_requests
+        SET status = 'edited',
+            current_revision = ${newRevision},
+            decided_at = NOW(),
+            card_version = card_version + 1,
+            updated_at = NOW()
+        WHERE id = ${req.id}
+      `;
+
+      // 5. Issue approval token bound to new revision & new params hash
+      const tokenRows = await tx<{ jti: string }[]>`
+        INSERT INTO gatekeep_approval_tokens (
+          request_id,
+          revision,
+          params_hash,
+          token_hash,
+          expires_at
+        ) VALUES (
+          ${req.id},
+          ${newRevision},
+          ${params.paramsHash},
+          ${params.tokenHash},
+          ${params.tokenExpiresAt}
+        )
+        RETURNING jti
+      `;
+
+      return {
+        success: true,
+        newRevision,
+        paramsHash: params.paramsHash,
+        jti: tokenRows[0].jti,
+      };
+    });
+  },
+
+  // ==========================================================================
+  // 8. ASK CONTEXT & ANSWER
+  // ==========================================================================
+  async requestContext(
+    params: {
+      requestId: string;
+      slackUserId: string;
+      slackTeamId?: string | null;
+      question: string;
+    },
+    customSql?: Sql,
+  ): Promise<{ success: boolean; error?: string }> {
+    const sql = customSql ?? getSqlWrite();
+
+    return await sql.begin(async (tx) => {
+      const reqs = await tx<GatekeepRequestRow[]>`
+        SELECT * FROM gatekeep_requests
+        WHERE id = ${params.requestId}
+        FOR UPDATE
+      `;
+      if (reqs.length === 0) return { success: false, error: "Request not found" };
+      const req = reqs[0];
+
+      if (req.status !== "pending") {
+        return { success: false, error: `Cannot request context in status "${req.status}"` };
+      }
+
+      await tx`
+        INSERT INTO gatekeep_decisions (
+          request_id,
+          revision,
+          stage,
+          decision,
+          slack_user_id,
+          slack_team_id,
+          note,
+          params_hash
+        ) VALUES (
+          ${req.id},
+          ${req.current_revision},
+          0,
+          'ask_context',
+          ${params.slackUserId},
+          ${params.slackTeamId ?? null},
+          ${params.question},
+          ''
+        )
+      `;
+
+      await tx`
+        UPDATE gatekeep_requests
+        SET status = 'needs_info',
+            card_version = card_version + 1,
+            updated_at = NOW()
+        WHERE id = ${req.id}
+      `;
+
+      return { success: true };
+    });
+  },
+
+  async answerContext(
+    params: {
+      requestId: string;
+      agentId: string;
+      answer: string;
+    },
+    customSql?: Sql,
+  ): Promise<{ success: boolean; error?: string }> {
+    const sql = customSql ?? getSqlWrite();
+
+    return await sql.begin(async (tx) => {
+      const reqs = await tx<GatekeepRequestRow[]>`
+        SELECT * FROM gatekeep_requests
+        WHERE id = ${params.requestId}
+        FOR UPDATE
+      `;
+      if (reqs.length === 0) return { success: false, error: "Request not found" };
+      const req = reqs[0];
+
+      if (req.agent_id !== params.agentId) {
+        return { success: false, error: "Agent unauthorized for this request" };
+      }
+      if (req.status !== "needs_info") {
+        return { success: false, error: `Request is in status "${req.status}", not waiting for context` };
+      }
+
+      // Record answer audit event
+      await tx`
+        INSERT INTO gatekeep_audit_events (
+          workspace_id,
+          seq,
+          request_id,
+          actor,
+          event_type,
+          data,
+          row_hash
+        ) VALUES (
+          ${req.workspace_id},
+          1,
+          ${req.id},
+          ${`agent:${params.agentId}`},
+          'request.context_provided',
+          ${tx.json({ answer: params.answer })},
+          ${new Uint8Array(32)}
+        )
+      `;
+
+      // Move back to pending
+      await tx`
+        UPDATE gatekeep_requests
+        SET status = 'pending',
+            card_version = card_version + 1,
+            updated_at = NOW()
+        WHERE id = ${req.id}
+      `;
+
+      return { success: true };
+    });
+  },
+
+  // ==========================================================================
+  // 9. CANCEL REQUEST
+  // ==========================================================================
+  async cancelRequest(
+    params: {
+      requestId: string;
+      agentId: string;
+      reason?: string | null;
+    },
+    customSql?: Sql,
+  ): Promise<{ success: boolean; error?: string }> {
+    const sql = customSql ?? getSqlWrite();
+
+    return await sql.begin(async (tx) => {
+      const reqs = await tx<GatekeepRequestRow[]>`
+        SELECT * FROM gatekeep_requests
+        WHERE id = ${params.requestId}
+        FOR UPDATE
+      `;
+      if (reqs.length === 0) return { success: false, error: "Request not found" };
+      const req = reqs[0];
+
+      if (req.agent_id !== params.agentId) {
+        return { success: false, error: "Agent unauthorized for this request" };
+      }
+      if (req.status !== "pending" && req.status !== "needs_info") {
+        return { success: false, error: `Cannot cancel request in terminal/in-flight status "${req.status}"` };
+      }
+
+      await tx`
+        UPDATE gatekeep_requests
+        SET status = 'cancelled',
+            decided_at = NOW(),
+            card_version = card_version + 1,
+            updated_at = NOW()
+        WHERE id = ${req.id}
+      `;
+
+      return { success: true };
+    });
+  },
+
+  // ==========================================================================
+  // 10. APP HOME & USAGE QUERIES
+  // ==========================================================================
+  async listAgentsByWorkspace(
+    workspaceId: string,
+    sql: Sql = getSqlRead(),
+  ): Promise<GatekeepAgentRow[]> {
+    return await sql<GatekeepAgentRow[]>`
+      SELECT * FROM gatekeep_agents
+      WHERE workspace_id = ${workspaceId}
+      ORDER BY created_at DESC
+    `;
+  },
+
+  async getPendingRequestsByWorkspace(
+    workspaceId: string,
+    limit: number = 20,
+    sql: Sql = getSqlRead(),
+  ): Promise<GatekeepRequestRow[]> {
+    return await sql<GatekeepRequestRow[]>`
+      SELECT * FROM gatekeep_requests
+      WHERE workspace_id = ${workspaceId}
+        AND status IN ('pending', 'needs_info')
+      ORDER BY created_at DESC
+      LIMIT ${limit}
+    `;
+  },
+
+  async incrementMonthlyUsage(
+    params: {
+      workspaceId: string;
+      month: string;
+      autoApproved?: boolean;
+    },
+    sql: Sql = getSqlWrite(),
+  ): Promise<void> {
+    const id = `${params.workspaceId}:${params.month}`;
+    const autoInc = params.autoApproved ? 1 : 0;
+    await sql`
+      INSERT INTO gatekeep_monthly_usage (
+        id,
+        workspace_id,
+        billing_month,
+        requests_count,
+        auto_approved_count
+      ) VALUES (
+        ${id},
+        ${params.workspaceId},
+        ${params.month},
+        1,
+        ${autoInc}
+      )
+      ON CONFLICT (id) DO UPDATE SET
+        requests_count = gatekeep_monthly_usage.requests_count + 1,
+        auto_approved_count = gatekeep_monthly_usage.auto_approved_count + ${autoInc}
+    `;
+  },
+
+  async getMonthlyUsage(
+    workspaceId: string,
+    month: string,
+    sql: Sql = getSqlRead(),
+  ): Promise<{ requests_count: number; auto_approved_count: number } | null> {
+    const id = `${workspaceId}:${month}`;
+    const rows = await sql<{ requests_count: number; auto_approved_count: number }[]>`
+      SELECT requests_count, auto_approved_count
+      FROM gatekeep_monthly_usage
+      WHERE id = ${id}
+    `;
+    return rows.length > 0 ? rows[0] : null;
+  },
 };

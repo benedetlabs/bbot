@@ -29,6 +29,9 @@ secrets:
   secretAppBotToken: ""
   queueAppBotToken: ""
   todoAppBotToken: ""
+  gatekeepAppSigningSecret: ""
+  gatekeepAppBotToken: ""
+  gatekeepPublicBaseUrl: "https://gatekeep.bsuit.app"
   cloudflareTunnelToken: ""
   openobserveAdminEmail: "benedetlabs@gmail.com"
   openobserveAdminPassword: "CHANGE_ME_OPENOBSERVE_PASSWORD"
@@ -104,6 +107,10 @@ apps:
       imageTag: "v1.0.0"
       replicas: 2
     todo-app:
+      enabled: false
+      imageTag: "v1.0.0"
+      replicas: 2
+    gatekeep-app:
       enabled: false
       imageTag: "v1.0.0"
       replicas: 2

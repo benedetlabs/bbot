@@ -86,19 +86,31 @@ function createMockGatekeepDb() {
 
     // 4. INSERT INTO gatekeep_request_revisions
     if (rawSql.includes("INSERT INTO gatekeep_request_revisions")) {
+      let revNum = 1;
+      let paramsEnc = values[1] as Uint8Array;
+      let paramsHash = String(values[2]);
+      let createdBy = String(values[9] ?? values[4]);
+
+      if (values.length === 5) {
+        revNum = Number(values[1]);
+        paramsEnc = values[2] as Uint8Array;
+        paramsHash = String(values[3]);
+        createdBy = String(values[4]);
+      }
+
       const newRev: GatekeepRevisionRow = {
         id: `rev-${revisions.length + 1}`,
         request_id: String(values[0]),
-        revision: 1,
-        params_enc: values[1] as Uint8Array,
-        params_hash: String(values[2]),
-        params_schema: (values[3] as Record<string, unknown>) ?? null,
-        editable: (values[4] as string[]) ?? [],
-        display: (values[5] as Record<string, unknown>) ?? null,
-        preview_enc: (values[6] as Uint8Array) ?? null,
-        preview_hash: values[7] ? String(values[7]) : null,
-        secret_refs: (values[8] as string[]) ?? [],
-        created_by: String(values[9]),
+        revision: revNum,
+        params_enc: paramsEnc,
+        params_hash: paramsHash,
+        params_schema: null,
+        editable: [],
+        display: null,
+        preview_enc: null,
+        preview_hash: null,
+        secret_refs: [],
+        created_by: createdBy,
         created_at: new Date(),
       };
       revisions.push(newRev);
@@ -114,6 +126,20 @@ function createMockGatekeepDb() {
     if (rawSql.includes("FROM gatekeep_requests WHERE id =")) {
       const id = String(values[0]);
       const found = requests.filter((r) => r.id === id);
+      return Promise.resolve(found);
+    }
+
+    // 6b. SELECT * FROM gatekeep_requests WHERE workspace_id = ... AND status IN ('pending', 'needs_info')
+    if (rawSql.includes("FROM gatekeep_requests WHERE workspace_id =") && rawSql.includes("status IN")) {
+      const wsId = String(values[0]);
+      const found = requests.filter((r) => r.workspace_id === wsId && (r.status === "pending" || r.status === "needs_info"));
+      return Promise.resolve(found);
+    }
+
+    // 6c. SELECT * FROM gatekeep_agents WHERE workspace_id = ...
+    if (rawSql.includes("FROM gatekeep_agents WHERE workspace_id =")) {
+      const wsId = String(values[0]);
+      const found = agents.filter((a) => a.workspace_id === wsId);
       return Promise.resolve(found);
     }
 
@@ -136,12 +162,58 @@ function createMockGatekeepDb() {
     }
 
     // 8. UPDATE gatekeep_requests SET status = ...
-    if (rawSql.includes("UPDATE gatekeep_requests SET status =")) {
+    if (rawSql.includes("UPDATE gatekeep_requests")) {
       if (rawSql.includes("status = 'executing'")) {
         const id = String(values[0]);
         const req = requests.find((r) => r.id === id);
         if (req) {
           req.status = "executing";
+          req.updated_at = new Date();
+          return Promise.resolve([req]);
+        }
+        return Promise.resolve([]);
+      }
+      if (rawSql.includes("status = 'edited'")) {
+        const newRev = Number(values[0]);
+        const id = String(values[1]);
+        const req = requests.find((r) => r.id === id);
+        if (req) {
+          req.status = "edited";
+          req.current_revision = newRev;
+          req.card_version++;
+          req.updated_at = new Date();
+          return Promise.resolve([req]);
+        }
+        return Promise.resolve([]);
+      }
+      if (rawSql.includes("status = 'needs_info'")) {
+        const id = String(values[0]);
+        const req = requests.find((r) => r.id === id);
+        if (req) {
+          req.status = "needs_info";
+          req.card_version++;
+          req.updated_at = new Date();
+          return Promise.resolve([req]);
+        }
+        return Promise.resolve([]);
+      }
+      if (rawSql.includes("status = 'cancelled'")) {
+        const id = String(values[0]);
+        const req = requests.find((r) => r.id === id);
+        if (req) {
+          req.status = "cancelled";
+          req.card_version++;
+          req.updated_at = new Date();
+          return Promise.resolve([req]);
+        }
+        return Promise.resolve([]);
+      }
+      if (rawSql.includes("status = 'pending'")) {
+        const id = String(values[0]);
+        const req = requests.find((r) => r.id === id);
+        if (req) {
+          req.status = "pending";
+          req.card_version++;
           req.updated_at = new Date();
           return Promise.resolve([req]);
         }
@@ -470,4 +542,129 @@ Deno.test("gatekeepRepo: single-use approval token lifecycle and receipt report"
     mockSql,
   );
   assertEquals(receiptRes.success, true);
+});
+
+Deno.test("gatekeepRepo: createRevisionAndApprove creates revision 2 and transitions to edited", async () => {
+  const { mockSql, requests, revisions, tokens } = createMockGatekeepDb();
+
+  const created = await gatekeepRepo.createRequest(
+    {
+      publicId: "gk_req_edit_01",
+      workspaceId: "ws_edit",
+      agentId: "agent_edit",
+      action: "deploy.k8s.rollout",
+      status: "pending",
+      risk: "high",
+      policyVersion: 1,
+      evaluation: {},
+      expiresAt: new Date(Date.now() + 1800000),
+      paramsEnc: new Uint8Array([1, 2, 3]),
+      paramsHash: "hash_rev_1",
+      createdBy: "agent:agent_edit",
+    },
+    mockSql,
+  );
+
+  const editRes = await gatekeepRepo.createRevisionAndApprove(
+    {
+      requestId: created.request.id,
+      slackUserId: "U_APPROVER",
+      note: "Reduced replicas from 10 to 3",
+      paramsEnc: new Uint8Array([4, 5, 6]),
+      paramsHash: "hash_rev_2_edited",
+      createdBy: "slack:U_APPROVER",
+      tokenHash: new Uint8Array([99, 98, 97]),
+      tokenExpiresAt: new Date(Date.now() + 300000),
+    },
+    mockSql,
+  );
+
+  assertEquals(editRes.success, true);
+  assertEquals(editRes.newRevision, 2);
+  assertEquals(editRes.paramsHash, "hash_rev_2_edited");
+  assertEquals(typeof editRes.jti, "string");
+
+  const req = requests.find((r) => r.id === created.request.id);
+  assertEquals(req?.status, "edited");
+  assertEquals(req?.current_revision, 2);
+});
+
+Deno.test("gatekeepRepo: requestContext and answerContext flow", async () => {
+  const { mockSql, requests } = createMockGatekeepDb();
+
+  const created = await gatekeepRepo.createRequest(
+    {
+      publicId: "gk_req_ctx_01",
+      workspaceId: "ws_ctx",
+      agentId: "agent_ctx",
+      action: "stripe.refund.create",
+      status: "pending",
+      risk: "medium",
+      policyVersion: 1,
+      evaluation: {},
+      expiresAt: new Date(Date.now() + 1800000),
+      paramsEnc: new Uint8Array([1]),
+      paramsHash: "hash_ctx_1",
+      createdBy: "agent:agent_ctx",
+    },
+    mockSql,
+  );
+
+  // Approver requests context
+  const askRes = await gatekeepRepo.requestContext(
+    {
+      requestId: created.request.id,
+      slackUserId: "U_REVI",
+      question: "Which invoice was double charged?",
+    },
+    mockSql,
+  );
+  assertEquals(askRes.success, true);
+  assertEquals(requests.find((r) => r.id === created.request.id)?.status, "needs_info");
+
+  // Agent answers context
+  const answerRes = await gatekeepRepo.answerContext(
+    {
+      requestId: created.request.id,
+      agentId: "agent_ctx",
+      answer: "Invoice INV-4022",
+    },
+    mockSql,
+  );
+  assertEquals(answerRes.success, true);
+  assertEquals(requests.find((r) => r.id === created.request.id)?.status, "pending");
+});
+
+Deno.test("gatekeepRepo: cancelRequest transitions pending request to cancelled", async () => {
+  const { mockSql, requests } = createMockGatekeepDb();
+
+  const created = await gatekeepRepo.createRequest(
+    {
+      publicId: "gk_req_cancel_01",
+      workspaceId: "ws_cancel",
+      agentId: "agent_cancel",
+      action: "deploy.k8s.rollout",
+      status: "pending",
+      risk: "low",
+      policyVersion: 1,
+      evaluation: {},
+      expiresAt: new Date(Date.now() + 1800000),
+      paramsEnc: new Uint8Array([1]),
+      paramsHash: "hash_cancel_1",
+      createdBy: "agent:agent_cancel",
+    },
+    mockSql,
+  );
+
+  const cancelRes = await gatekeepRepo.cancelRequest(
+    {
+      requestId: created.request.id,
+      agentId: "agent_cancel",
+      reason: "No longer needed",
+    },
+    mockSql,
+  );
+
+  assertEquals(cancelRes.success, true);
+  assertEquals(requests.find((r) => r.id === created.request.id)?.status, "cancelled");
 });

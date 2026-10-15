@@ -21,6 +21,9 @@ export interface RequestApprovalInput<T = Record<string, unknown>> {
   risk?: RiskLevel;
   gate?: GateType;
   idempotencyKey?: string;
+  preview?: { kind: "text" | "diff" | "sql" | "json" | "table"; content: string };
+  editable?: string[];
+  expiresInSeconds?: number;
 }
 
 export interface GatekeepRequestStatusResponse {

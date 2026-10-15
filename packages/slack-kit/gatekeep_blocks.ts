@@ -3,7 +3,7 @@
  * Block Kit builders for Gatekeep approval cards, decision updates, and modals.
  */
 
-import type { SlackBlock, SlackMessagePayload, SlackModalView } from "./mod.ts";
+import type { SlackBlock, SlackHomeView, SlackMessagePayload, SlackModalView } from "./mod.ts";
 
 export interface GatekeepCardOptions {
   publicId: string;
@@ -382,5 +382,247 @@ export function buildGatekeepRejectModal(options: {
         },
       },
     ],
+  };
+}
+
+/**
+ * Builds modal view for editing parameters and approving the new revision.
+ */
+export function buildGatekeepEditModal(options: {
+  publicId: string;
+  action: string;
+  currentParamsJson: string;
+}): SlackModalView {
+  return {
+    type: "modal",
+    callback_id: "gk_edit_modal_submit",
+    title: {
+      type: "plain_text",
+      text: "Edit & Approve",
+      emoji: true,
+    },
+    submit: {
+      type: "plain_text",
+      text: "Approve Edited",
+      emoji: true,
+    },
+    close: {
+      type: "plain_text",
+      text: "Cancel",
+      emoji: true,
+    },
+    private_metadata: JSON.stringify({
+      public_id: options.publicId,
+    }),
+    blocks: [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `*Action:* \`${options.action}\`\n_Editing parameters creates a new revision with a new cryptographic hash binding. The agent must execute these exact edited parameters._`,
+        },
+      },
+      {
+        type: "input",
+        block_id: "params_block",
+        label: {
+          type: "plain_text",
+          text: "Revised Parameters (JSON)",
+          emoji: true,
+        },
+        element: {
+          type: "plain_text_input",
+          action_id: "params_input",
+          multiline: true,
+          initial_value: options.currentParamsJson,
+        },
+      },
+      {
+        type: "input",
+        block_id: "note_block",
+        label: {
+          type: "plain_text",
+          text: "Note to Agent / Reason (optional)",
+          emoji: true,
+        },
+        optional: true,
+        element: {
+          type: "plain_text_input",
+          action_id: "note_input",
+          placeholder: {
+            type: "plain_text",
+            text: "Explain why parameters were modified...",
+          },
+        },
+      },
+    ],
+  };
+}
+
+/**
+ * Builds modal view for requesting additional context from the agent.
+ */
+export function buildGatekeepAskModal(options: {
+  publicId: string;
+  action: string;
+}): SlackModalView {
+  return {
+    type: "modal",
+    callback_id: "gk_ask_modal_submit",
+    title: {
+      type: "plain_text",
+      text: "Ask Context",
+      emoji: true,
+    },
+    submit: {
+      type: "plain_text",
+      text: "Send Question",
+      emoji: true,
+    },
+    close: {
+      type: "plain_text",
+      text: "Cancel",
+      emoji: true,
+    },
+    private_metadata: JSON.stringify({
+      public_id: options.publicId,
+    }),
+    blocks: [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `*Action:* \`${options.action}\`\n_The agent will be notified to provide additional context before approval._`,
+        },
+      },
+      {
+        type: "input",
+        block_id: "question_block",
+        label: {
+          type: "plain_text",
+          text: "Question for Agent",
+          emoji: true,
+        },
+        element: {
+          type: "plain_text_input",
+          action_id: "question_input",
+          multiline: true,
+          placeholder: {
+            type: "plain_text",
+            text: "Ask for clarifying context or intent...",
+          },
+        },
+      },
+    ],
+  };
+}
+
+/**
+ * Builds App Home dashboard view for Gatekeep.
+ */
+export function buildGatekeepHomeView(options: {
+  workspaceId: string;
+  pendingCount: number;
+  agentsCount: number;
+  monthlyRequests: number;
+  pendingRequests?: Array<{
+    publicId: string;
+    action: string;
+    risk: string;
+    expiresAt: Date;
+  }>;
+}): SlackHomeView {
+  const blocks: SlackBlock[] = [
+    {
+      type: "header",
+      text: {
+        type: "plain_text",
+        text: "🛡️ Gatekeep Control Center",
+        emoji: true,
+      },
+    },
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: "*Human-in-the-loop approval platform for AI agents & automations.*",
+      },
+    },
+    {
+      type: "divider",
+    },
+    {
+      type: "section",
+      fields: [
+        {
+          type: "mrkdwn",
+          text: `*Pending Approvals:*\n${options.pendingCount}`,
+        },
+        {
+          type: "mrkdwn",
+          text: `*Active Agents:*\n${options.agentsCount}`,
+        },
+        {
+          type: "mrkdwn",
+          text: `*Requests This Month:*\n${options.monthlyRequests}`,
+        },
+        {
+          type: "mrkdwn",
+          text: `*Status:*\n🟢 Active`,
+        },
+      ],
+    },
+    {
+      type: "divider",
+    },
+  ];
+
+  if (options.pendingRequests && options.pendingRequests.length > 0) {
+    blocks.push({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `*⏳ Waiting for Decision (${options.pendingRequests.length})*`,
+      },
+    });
+
+    for (const req of options.pendingRequests.slice(0, 5)) {
+      const expiresUnix = Math.floor(req.expiresAt.getTime() / 1000);
+      blocks.push({
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `• \`${req.action}\` (Risk: *${req.risk.toUpperCase()}*) — Expires <!date^${expiresUnix}^{time}|in a few mins>`,
+        },
+      });
+    }
+  } else {
+    blocks.push({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: "✅ *No approvals pending right now.* All systems nominal.",
+      },
+    });
+  }
+
+  blocks.push(
+    {
+      type: "divider",
+    },
+    {
+      type: "context",
+      elements: [
+        {
+          type: "mrkdwn",
+          text: "Gatekeep · bsuit.app · RFC 8785 canonical hash binding & single-use tokens",
+        },
+      ],
+    },
+  );
+
+  return {
+    type: "home",
+    blocks,
   };
 }
