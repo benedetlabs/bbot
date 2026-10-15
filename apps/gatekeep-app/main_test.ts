@@ -12,6 +12,7 @@ import {
   installationsRepo,
   kv,
   setCustomSql,
+  todosRepo,
   workspacesRepo,
   type GatekeepAgentRow,
   type GatekeepFullRequest,
@@ -582,3 +583,188 @@ Deno.test("gatekeep-app: POST /slack/events handles app_uninstalled and tokens_r
   assertEquals(deletedTeam, "T_REVOKED_TEAM");
   assertEquals(deletedSlug, "gatekeep");
 });
+
+Deno.test("gatekeep-app: gk_reject_modal_submit creates follow-up todo when note and on_behalf_of exist", async () => {
+  let createdTodoTitle = "";
+  let createdTodoAssignee = "";
+  todosRepo.create = ((params: { title: string; assigneeSlackUserId?: string }) => {
+    createdTodoTitle = params.title;
+    createdTodoAssignee = params.assigneeSlackUserId ?? "";
+    return Promise.resolve({ id: "todo-123" });
+  }) as unknown as typeof todosRepo.create;
+
+  const mockReqWithInitiator: GatekeepFullRequest = {
+    request: {
+      id: "req-reject-todo",
+      public_id: "gk_req_REJECT1",
+      workspace_id: "ws-001",
+      agent_id: "agent-001",
+      idempotency_key: null,
+      action: "stripe.refund.create",
+      target: "stripe:acct_live",
+      status: "pending",
+      current_revision: 1,
+      risk: "critical",
+      gate: "soft",
+      policy_version: 1,
+      matched_rule_ids: [],
+      evaluation: {},
+      on_behalf_of_slack_user_id: "U_INITIATOR_DEV",
+      justification: null,
+      callback_url: null,
+      slack_channel_id: "C_OPS",
+      slack_message_ts: "123.456",
+      card_version: 1,
+      queue_id: null,
+      queue_entry_id: null,
+      todo_id: null,
+      expires_at: new Date(Date.now() + 60000),
+      decided_at: null,
+      executed_at: null,
+      created_at: new Date(),
+      updated_at: new Date(),
+    },
+    currentRevision: {
+      id: "rev-001",
+      request_id: "req-reject-todo",
+      revision: 1,
+      params_enc: new Uint8Array(),
+      params_hash: "hash_test_123",
+      params_schema: null,
+      editable: [],
+      display: null,
+      preview_enc: null,
+      preview_hash: null,
+      secret_refs: [],
+      created_by: "agent:agent-001",
+      created_at: new Date(),
+    },
+    decisions: [],
+    revisions: [],
+    execution: null,
+  };
+
+  gatekeepRepo.getRequestByPublicId = (() => Promise.resolve(mockReqWithInitiator)) as typeof gatekeepRepo.getRequestByPublicId;
+  gatekeepRepo.recordDecision = (() => Promise.resolve({
+    success: true,
+    resultingStatus: "rejected",
+  })) as typeof gatekeepRepo.recordDecision;
+
+  const viewPayload = {
+    type: "view_submission",
+    user: { id: "U_APPROVER_ALICE" },
+    team: { id: "T_TEST" },
+    view: {
+      callback_id: "gk_reject_modal_submit",
+      private_metadata: JSON.stringify({ public_id: "gk_req_REJECT1", params_hash: "hash_test_123" }),
+      state: {
+        values: {
+          note_block: {
+            note_input: {
+              value: "Amount exceeds SLA threshold",
+            },
+          },
+        },
+      },
+    },
+  };
+
+  const body = `payload=${encodeURIComponent(JSON.stringify(viewPayload))}`;
+  const headers = await createSignedHeaders(body, getSigningSecret());
+  const res = await app.request("/slack/interactions", {
+    method: "POST",
+    headers,
+    body,
+  });
+
+  assertEquals(res.status, 200);
+  assertEquals(createdTodoAssignee, "U_INITIATOR_DEV");
+  assertEquals(createdTodoTitle.includes("stripe.refund.create"), true);
+  assertEquals(createdTodoTitle.includes("Amount exceeds SLA threshold"), true);
+});
+
+Deno.test("gatekeep-app: POST /v1/requests/:id/receipt creates follow-up todo on execution failure", async () => {
+  let failureTodoTitle = "";
+  let failureTodoAssignee = "";
+  todosRepo.create = ((params: { title: string; assigneeSlackUserId?: string }) => {
+    failureTodoTitle = params.title;
+    failureTodoAssignee = params.assigneeSlackUserId ?? "";
+    return Promise.resolve({ id: "todo-failure-456" });
+  }) as unknown as typeof todosRepo.create;
+
+  const mockReqWithInitiator: GatekeepFullRequest = {
+    request: {
+      id: "req-exec-fail",
+      public_id: "gk_req_FAIL1",
+      workspace_id: "ws-001",
+      agent_id: "agent-001",
+      idempotency_key: null,
+      action: "k8s.pod.restart",
+      target: "civo:k3s",
+      status: "executing",
+      current_revision: 1,
+      risk: "high",
+      gate: "soft",
+      policy_version: 1,
+      matched_rule_ids: [],
+      evaluation: {},
+      on_behalf_of_slack_user_id: "U_DEVOPS_BOB",
+      justification: null,
+      callback_url: null,
+      slack_channel_id: "C_OPS",
+      slack_message_ts: "123.456",
+      card_version: 1,
+      queue_id: null,
+      queue_entry_id: null,
+      todo_id: null,
+      expires_at: new Date(Date.now() + 60000),
+      decided_at: new Date(),
+      executed_at: null,
+      created_at: new Date(),
+      updated_at: new Date(),
+    },
+    currentRevision: {
+      id: "rev-001",
+      request_id: "req-exec-fail",
+      revision: 1,
+      params_enc: new Uint8Array(),
+      params_hash: "hash_test_123",
+      params_schema: null,
+      editable: [],
+      display: null,
+      preview_enc: null,
+      preview_hash: null,
+      secret_refs: [],
+      created_by: "agent:agent-001",
+      created_at: new Date(),
+    },
+    decisions: [],
+    revisions: [],
+    execution: null,
+  };
+
+  gatekeepRepo.getRequestByPublicId = (() => Promise.resolve(mockReqWithInitiator)) as typeof gatekeepRepo.getRequestByPublicId;
+  gatekeepRepo.recordExecutionReceipt = (() => Promise.resolve({ success: true })) as typeof gatekeepRepo.recordExecutionReceipt;
+
+  const res = await app.request("/v1/requests/gk_req_FAIL1/receipt", {
+    method: "POST",
+    headers: {
+      "Authorization": TEST_AUTH_HEADER,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      status: "failed",
+      summary: "Connection timeout to Kubernetes API server",
+      duration_ms: 4500,
+    }),
+  });
+
+  assertEquals(res.status, 200);
+  const data = await res.json();
+  assertEquals(data.ok, true);
+  assertEquals(data.status, "failed");
+  assertEquals(failureTodoAssignee, "U_DEVOPS_BOB");
+  assertEquals(failureTodoTitle.includes("k8s.pod.restart"), true);
+  assertEquals(failureTodoTitle.includes("Connection timeout to Kubernetes API server"), true);
+});
+

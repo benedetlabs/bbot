@@ -27,6 +27,7 @@ import {
   getSqlWrite,
   installationsRepo,
   kv,
+  todosRepo,
   workspacesRepo,
 } from "@suite/db";
 import { cancelOutboxEvents, enqueueOutboxEvent } from "@suite/outbox";
@@ -518,6 +519,16 @@ app.post("/v1/requests/:id/receipt", async (c) => {
     },
   });
 
+  // If execution failed, create follow-up todo task for initiator
+  if (body.status === "failed" && fullReq.request.on_behalf_of_slack_user_id) {
+    todosRepo.create({
+      workspaceId: agent.workspace_id,
+      creatorSlackUserId: "U_GATEKEEP",
+      assigneeSlackUserId: fullReq.request.on_behalf_of_slack_user_id,
+      title: `Investigate failure: ${fullReq.request.action} — ${body.summary ?? "execution reported failure"}`,
+    }).catch(() => {});
+  }
+
   return c.json({
     ok: true,
     status: body.status === "succeeded" ? "executed" : "failed",
@@ -879,6 +890,16 @@ app.post(
             decisionNote: note,
           },
         });
+
+        // If rejected with note, create follow-up todo for initiator
+        if (note && fullReq.request.on_behalf_of_slack_user_id) {
+          todosRepo.create({
+            workspaceId: fullReq.request.workspace_id,
+            creatorSlackUserId: payload.user?.id ?? "U_GATEKEEP",
+            assigneeSlackUserId: fullReq.request.on_behalf_of_slack_user_id,
+            title: `Fix & resubmit: ${fullReq.request.action} — "${note}"`,
+          }).catch(() => {});
+        }
       }
 
       return c.json(slackModalClear());
