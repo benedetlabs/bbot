@@ -140,30 +140,34 @@ Deno.test("slack-kit: buildSecretModal structure", () => {
 
   const metadata = JSON.parse(modal.private_metadata!);
   assertEquals(metadata.channelId, "C123456");
+  assertEquals(metadata.directMessage, false);
 });
 
 Deno.test("slack-kit: buildSecretActiveCard structure", () => {
   const card = buildSecretActiveCard({
     creatorSlackId: "U111",
     secretId: "sec-999",
-    clientKeyHex: "aabbccdd11223344",
+    linkUrl:
+      "https://secret.bsuit.app/s/sec-999#aabbccdd11223344aabbccdd11223344",
     contextLabel: "API Token",
-    allowedRecipientSlackId: "U222",
     ttlMinutes: 60,
     remainingViews: 1,
   });
 
-  assertEquals(card.response_type, "in_channel");
+  assertEquals(card.response_type, "ephemeral");
   assertEquals(card.blocks.length, 2);
+  assertEquals(card.text?.toLowerCase().includes("one-time secret link"), true);
+  const serialized = JSON.stringify(card);
+  assertEquals(serialized.includes("secret_reveal_click"), false);
 
   const actionsBlock = card.blocks[1];
   assertEquals(actionsBlock.type, "actions");
-  const revealButton = actionsBlock.elements![0] as {
+  const destroyButton = actionsBlock.elements![0] as {
     action_id: string;
     value: string;
   };
-  assertEquals(revealButton.action_id, "secret_reveal_click");
-  assertEquals(revealButton.value, "sec-999:aabbccdd11223344");
+  assertEquals(destroyButton.action_id, "secret_revoke_click");
+  assertEquals(destroyButton.value, "sec-999");
 });
 
 Deno.test("slack-kit: buildSecretRevealedModal and buildSecretBurnedCard", () => {
@@ -233,12 +237,23 @@ Deno.test("slack-kit: queue and todo card builders", () => {
     }[];
   };
   assertEquals(queueActionsWithSecret.elements.length, 3);
-  assertEquals(queueActionsWithSecret.elements[0].action_id, "queue_join_click");
-  assertEquals(queueActionsWithSecret.elements[1].action_id, "queue_done_click");
-  assertEquals(queueActionsWithSecret.elements[2].action_id, "queue_actions_select");
+  assertEquals(
+    queueActionsWithSecret.elements[0].action_id,
+    "queue_join_click",
+  );
+  assertEquals(
+    queueActionsWithSecret.elements[1].action_id,
+    "queue_done_click",
+  );
+  assertEquals(
+    queueActionsWithSecret.elements[2].action_id,
+    "queue_actions_select",
+  );
   assertEquals(queueActionsWithSecret.elements[2].options?.length, 4);
   assertEquals(
-    queueActionsWithSecret.elements[2].options?.some((o) => o.value === "secret:q-123"),
+    queueActionsWithSecret.elements[2].options?.some((o) =>
+      o.value === "secret:q-123"
+    ),
     true,
   );
 
@@ -262,19 +277,27 @@ Deno.test("slack-kit: queue and todo card builders", () => {
     true,
   );
   assertEquals(
-    activeActionsBlock.elements.some((e) => e.action_id === "queue_extend_click"),
+    activeActionsBlock.elements.some((e) =>
+      e.action_id === "queue_extend_click"
+    ),
     true,
   );
   assertEquals(
-    activeActionsBlock.elements.some((e) => e.action_id === "queue_attach_secret_click"),
+    activeActionsBlock.elements.some((e) =>
+      e.action_id === "queue_attach_secret_click"
+    ),
     true,
   );
   assertEquals(
-    activeActionsBlock.elements.some((e) => e.action_id === "queue_config_click"),
+    activeActionsBlock.elements.some((e) =>
+      e.action_id === "queue_config_click"
+    ),
     true,
   );
   assertEquals(
-    activeActionsBlock.elements.some((e) => e.action_id === "queue_stats_click"),
+    activeActionsBlock.elements.some((e) =>
+      e.action_id === "queue_stats_click"
+    ),
     true,
   );
 
@@ -294,7 +317,9 @@ Deno.test("slack-kit: queue and todo card builders", () => {
     elements: { action_id: string }[];
   };
   assertEquals(
-    waitingActionsBlock.elements.some((e) => e.action_id === "queue_done_click"),
+    waitingActionsBlock.elements.some((e) =>
+      e.action_id === "queue_done_click"
+    ),
     true,
   );
 
@@ -421,7 +446,10 @@ Deno.test("slack-kit: queue config modal and delete confirm modal", () => {
 
   // Check Danger Zone delete button
   const dangerSection = configModal.blocks.find(
-    (b) => b.type === "section" && (b as { accessory?: { action_id?: string } }).accessory?.action_id === "queue_delete_modal_click",
+    (b) =>
+      b.type === "section" &&
+      (b as { accessory?: { action_id?: string } }).accessory?.action_id ===
+        "queue_delete_modal_click",
   ) as { accessory?: { action_id?: string; style?: string } };
   assertEquals(dangerSection !== undefined, true);
   assertEquals(dangerSection.accessory?.action_id, "queue_delete_modal_click");

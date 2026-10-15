@@ -28,18 +28,18 @@ resource "terraform_data" "docker_build_push" {
   triggers_replace = [
     each.key,
     each.value.image_tag,
-    filesha256("${local.repo_root}/Dockerfile"),
-    filesha256("${local.repo_root}/apps/${each.key}/main.ts")
   ]
 
   provisioner "local-exec" {
     working_dir = local.repo_root
     command     = <<-EOT
-      set -e
+      set -euo pipefail
+      rev=$(git rev-parse HEAD)
       echo "🚀 [Terraform Build] Compilando ${each.key}:${each.value.image_tag} (linux/amd64)..."
       docker buildx build \
         --platform linux/amd64 \
         --build-arg APP_NAME="${each.key}" \
+        --label org.opencontainers.image.revision="$rev" \
         -t "ghcr.io/${var.github_username}/${each.key}:${each.value.image_tag}" \
         --push .
     EOT

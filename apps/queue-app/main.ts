@@ -15,6 +15,7 @@ import {
   buildSecretModal,
   type QueueHolder,
   type QueueWaiter,
+  requireNonEmptyEnv,
   slackApi,
   type SlackMessagePayload,
   slackSignatureMiddleware,
@@ -23,23 +24,26 @@ import {
   installationsRepo,
   mauRepo,
   type QueueRow,
-  type QueueStats,
   queuesRepo,
+  type QueueStats,
   workspacesRepo,
 } from "@suite/db";
-import { decryptOAuthToken, importMasterKey } from "@suite/crypto";
+import {
+  decryptOAuthToken,
+  importMasterKey,
+  requireMasterKeyHex,
+} from "@suite/crypto";
 
 export const app = new Hono();
 
 export function getSigningSecret(): string {
-  return Deno.env.get("QUEUE_APP_SIGNING_SECRET") ??
-    Deno.env.get("SLACK_SIGNING_SECRET") ??
-    "dev_queue_signing_secret";
+  return requireNonEmptyEnv("QUEUE_APP_SIGNING_SECRET", [
+    "SLACK_SIGNING_SECRET",
+  ]);
 }
 
 export function getMasterKeyHex(): string {
-  return Deno.env.get("MASTER_ENCRYPTION_KEY_HEX") ??
-    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+  return requireMasterKeyHex();
 }
 
 export function extractSlackUserId(input: string): string | null {
@@ -303,8 +307,7 @@ app.post(
           );
           return c.json({
             response_type: "ephemeral",
-            text:
-              `⚠️ Error opening settings: ${openRes.error ?? "unknown"}.`,
+            text: `⚠️ Error opening settings: ${openRes.error ?? "unknown"}.`,
           });
         }
         return c.json({
@@ -315,8 +318,7 @@ app.post(
 
       return c.json({
         response_type: "ephemeral",
-        text:
-          `⚙️ Use \`/queue config\` to open the configuration modal.`,
+        text: `⚙️ Use \`/queue config\` to open the configuration modal.`,
       });
     }
 
@@ -330,7 +332,9 @@ app.post(
           channelName,
           stats,
         });
-        await slackApi.openView(botToken, triggerId, statsModal).catch(() => {});
+        await slackApi.openView(botToken, triggerId, statsModal).catch(
+          () => {},
+        );
         return c.json({
           response_type: "ephemeral",
           text: `📊 Queue analytics opened for #${channelName}.`,
@@ -339,8 +343,7 @@ app.post(
 
       return c.json({
         response_type: "ephemeral",
-        text:
-          `📊 *Queue Analytics for #${channelName}:*\n` +
+        text: `📊 *Queue Analytics for #${channelName}:*\n` +
           `• Active Holds: *${stats.activeHoldersCount}*\n` +
           `• Waiting in Line: *${stats.waitingLineCount}*\n` +
           `• Completed Holds: *${stats.completedHolds}*\n` +
@@ -373,7 +376,10 @@ app.post(
             queue.sticky_message_ts,
           );
         } catch (err) {
-          console.warn("Failed to delete sticky queue message from Slack:", err);
+          console.warn(
+            "Failed to delete sticky queue message from Slack:",
+            err,
+          );
         }
       }
 
@@ -486,7 +492,11 @@ app.post(
             maxHoldMinutes: queue.max_hold_minutes,
             allowSecret: queue.allow_secret,
           });
-          slackApi.postMessage(botToken, relRes.promotedEntry.slack_user_id, promoMsg).catch(() => {});
+          slackApi.postMessage(
+            botToken,
+            relRes.promotedEntry.slack_user_id,
+            promoMsg,
+          ).catch(() => {});
         }
         return c.json({
           response_type: "ephemeral",
@@ -532,7 +542,8 @@ app.post(
       if (extRes.status === "extended") {
         return c.json({
           response_type: "ephemeral",
-          text: `⏱️ Extended your active hold on #${channelName} by +${extraMinutes}m.`,
+          text:
+            `⏱️ Extended your active hold on #${channelName} by +${extraMinutes}m.`,
         });
       }
 
@@ -547,8 +558,7 @@ app.post(
       if (!queuesRepo.isUserAdmin(queue, userId)) {
         return c.json({
           response_type: "ephemeral",
-          text:
-            `🚫 Only queue administrators are allowed to kick users.`,
+          text: `🚫 Only queue administrators are allowed to kick users.`,
         });
       }
 
@@ -605,8 +615,7 @@ app.post(
       if (kickRes.status === "kicked_waiting") {
         return c.json({
           response_type: "ephemeral",
-          text:
-            `👢 <@${targetUserId}> was removed from the waiting line.`,
+          text: `👢 <@${targetUserId}> was removed from the waiting line.`,
         });
       }
 
@@ -706,26 +715,35 @@ app.post(
         const targetChannelId = meta.channelId || channelId;
         const values = payload.view?.state?.values ?? {};
 
-        const nameInput = values["queue_name_block"]?.["queue_name_input"]?.value;
-        const concurrencyInput =
-          values["max_concurrency_block"]?.["max_concurrency_input"]?.selected_option?.value;
-        const holdInput =
-          values["max_hold_minutes_block"]?.["max_hold_minutes_input"]?.selected_option?.value;
+        const nameInput = values["queue_name_block"]?.["queue_name_input"]
+          ?.value;
+        const concurrencyInput = values["max_concurrency_block"]
+          ?.["max_concurrency_input"]?.selected_option?.value;
+        const holdInput = values["max_hold_minutes_block"]
+          ?.["max_hold_minutes_input"]?.selected_option?.value;
         const selectedSecretOptions =
-          values["allow_secret_block"]?.["allow_secret_input"]?.selected_options ?? [];
+          values["allow_secret_block"]?.["allow_secret_input"]
+            ?.selected_options ?? [];
         const allowSecret = Array.isArray(selectedSecretOptions) &&
-          selectedSecretOptions.some((o: { value?: string }) => o.value === "allow_secret");
+          selectedSecretOptions.some((o: { value?: string }) =>
+            o.value === "allow_secret"
+          );
         const adminUsers =
-          values["admin_users_block"]?.["admin_users_input"]?.selected_users ?? [];
+          values["admin_users_block"]?.["admin_users_input"]?.selected_users ??
+            [];
 
         if (queueId) {
           await queuesRepo.updateQueueConfig({
             queueId,
             name: nameInput ? String(nameInput).trim() : undefined,
-            maxConcurrency: concurrencyInput ? parseInt(concurrencyInput, 10) : undefined,
+            maxConcurrency: concurrencyInput
+              ? parseInt(concurrencyInput, 10)
+              : undefined,
             maxHoldMinutes: holdInput ? parseInt(holdInput, 10) : undefined,
             allowSecret,
-            adminUserIds: Array.isArray(adminUsers) && adminUsers.length > 0 ? adminUsers : undefined,
+            adminUserIds: Array.isArray(adminUsers) && adminUsers.length > 0
+              ? adminUsers
+              : undefined,
           });
 
           if (botToken && targetChannelId) {
@@ -742,7 +760,11 @@ app.post(
 
       if (callbackId === "queue_delete_confirm_modal") {
         const metaStr = payload.view?.private_metadata ?? "{}";
-        let meta: { queueId?: string; channelId?: string; channelName?: string } = {};
+        let meta: {
+          queueId?: string;
+          channelId?: string;
+          channelName?: string;
+        } = {};
         try {
           meta = JSON.parse(metaStr);
         } catch {
@@ -927,8 +949,9 @@ app.post(
             );
             if (channelId) {
               await slackApi.postEphemeral(botToken, channelId, userId, {
-                text:
-                  `⚠️ Error opening settings: ${openRes.error ?? "unknown"}.`,
+                text: `⚠️ Error opening settings: ${
+                  openRes.error ?? "unknown"
+                }.`,
               });
             }
           }
@@ -945,11 +968,12 @@ app.post(
             channelName: queue.name,
             stats,
           });
-          await slackApi.openView(botToken, triggerId, statsModal).catch(() => {});
+          await slackApi.openView(botToken, triggerId, statsModal).catch(
+            () => {},
+          );
         } else if (botToken && channelId) {
           await slackApi.postEphemeral(botToken, channelId, userId, {
-            text:
-              `📊 *Queue Analytics for #${queue.name}:*\n` +
+            text: `📊 *Queue Analytics for #${queue.name}:*\n` +
               `• Active Holds: *${stats.activeHoldersCount}*\n` +
               `• Waiting in Line: *${stats.waitingLineCount}*\n` +
               `• Completed Holds: *${stats.completedHolds}*\n` +
@@ -964,8 +988,12 @@ app.post(
       // 2.4. My Actions Click (Contextual actions for requesting user)
       if (actionId === "queue_my_actions_click") {
         const state = await queuesRepo.getQueueState(queue.id);
-        const holder = state.activeHolders.find((h) => h.slack_user_id === userId);
-        const waiterIdx = state.waitingLine.findIndex((w) => w.slack_user_id === userId);
+        const holder = state.activeHolders.find((h) =>
+          h.slack_user_id === userId
+        );
+        const waiterIdx = state.waitingLine.findIndex((w) =>
+          w.slack_user_id === userId
+        );
         const isAdmin = queuesRepo.isUserAdmin(queue, userId);
 
         let userStatus: "active" | "waiting" | "none" = "none";
@@ -978,14 +1006,19 @@ app.post(
           const expTime = holder.expires_at
             ? new Date(holder.expires_at).getTime()
             : Date.now() + queue.max_hold_minutes * 60000;
-          expiresInMinutes = Math.max(0, Math.ceil((expTime - Date.now()) / 60000));
+          expiresInMinutes = Math.max(
+            0,
+            Math.ceil((expTime - Date.now()) / 60000),
+          );
         } else if (waiterIdx >= 0) {
           userStatus = "waiting";
           waitingPosition = waiterIdx + 1;
           const waiter = state.waitingLine[waiterIdx];
           waitingMinutes = Math.max(
             0,
-            Math.floor((Date.now() - new Date(waiter.joined_at).getTime()) / 60000),
+            Math.floor(
+              (Date.now() - new Date(waiter.joined_at).getTime()) / 60000,
+            ),
           );
         }
 
@@ -1066,13 +1099,17 @@ app.post(
           botToken,
         });
 
-        if (joinRes.status === "already_in_queue" && botToken && (channelId || queue.slack_channel_id)) {
+        if (
+          joinRes.status === "already_in_queue" && botToken &&
+          (channelId || queue.slack_channel_id)
+        ) {
           await slackApi.postEphemeral(
             botToken,
             channelId || queue.slack_channel_id,
             userId,
             {
-              text: "ℹ️ You are already in this queue. Click *Done / Leave* when you finish.",
+              text:
+                "ℹ️ You are already in this queue. Click *Done / Leave* when you finish.",
             },
           );
         } else if (joinRes.status === "acquired" && botToken) {
@@ -1084,7 +1121,9 @@ app.post(
             maxHoldMinutes: queue.max_hold_minutes,
             allowSecret: queue.allow_secret,
           });
-          await slackApi.postMessage(botToken, userId, promoMsg).catch(() => {});
+          await slackApi.postMessage(botToken, userId, promoMsg).catch(
+            () => {},
+          );
         }
         return c.text("OK");
       }
@@ -1107,7 +1146,11 @@ app.post(
             maxHoldMinutes: queue.max_hold_minutes,
             allowSecret: queue.allow_secret,
           });
-          slackApi.postMessage(botToken, relRes.promotedEntry.slack_user_id, promoMsg).catch(() => {});
+          slackApi.postMessage(
+            botToken,
+            relRes.promotedEntry.slack_user_id,
+            promoMsg,
+          ).catch(() => {});
         }
 
         await syncStickyQueueCard({
@@ -1117,13 +1160,17 @@ app.post(
           botToken,
         });
 
-        if (relRes.status === "not_in_queue" && botToken && (channelId || queue.slack_channel_id)) {
+        if (
+          relRes.status === "not_in_queue" && botToken &&
+          (channelId || queue.slack_channel_id)
+        ) {
           await slackApi.postEphemeral(
             botToken,
             channelId || queue.slack_channel_id,
             userId,
             {
-              text: "⚠️ You do not hold an active lock or waiting spot in this queue.",
+              text:
+                "⚠️ You do not hold an active lock or waiting spot in this queue.",
             },
           );
         }
@@ -1146,13 +1193,17 @@ app.post(
           botToken,
         });
 
-        if (extRes.status !== "extended" && botToken && (channelId || queue.slack_channel_id)) {
+        if (
+          extRes.status !== "extended" && botToken &&
+          (channelId || queue.slack_channel_id)
+        ) {
           await slackApi.postEphemeral(
             botToken,
             channelId || queue.slack_channel_id,
             userId,
             {
-              text: "⚠️ You do not hold an active lock on this queue to extend.",
+              text:
+                "⚠️ You do not hold an active lock on this queue to extend.",
             },
           );
         }
@@ -1261,6 +1312,8 @@ app.post(
 export default app;
 
 if (import.meta.main) {
+  getSigningSecret();
+  getMasterKeyHex();
   const port = parseInt(Deno.env.get("PORT") ?? "8080", 10);
   console.log(`Starting Queue App on port ${port}...`);
   Deno.serve({ port }, app.fetch);

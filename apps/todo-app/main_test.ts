@@ -1,5 +1,11 @@
 import { assertEquals } from "@std/assert";
 import { app, getSigningSecret, parseTodoCommandText } from "./main.ts";
+
+Deno.env.set(
+  "MASTER_ENCRYPTION_KEY_HEX",
+  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+);
+Deno.env.set("TODO_APP_SIGNING_SECRET", "test_todo_signing_secret");
 import { mauRepo, todosRepo, workspacesRepo } from "@suite/db";
 import { slackApi, type SlackMessagePayload } from "@suite/slack-kit";
 

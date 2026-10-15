@@ -9,6 +9,7 @@ import {
   buildTodoCard,
   buildTodoHomeView,
   buildTodoModal,
+  requireNonEmptyEnv,
   slackApi,
   slackModalClear,
   slackModalErrors,
@@ -21,19 +22,22 @@ import {
   todosRepo,
   workspacesRepo,
 } from "@suite/db";
-import { decryptOAuthToken, importMasterKey } from "@suite/crypto";
+import {
+  decryptOAuthToken,
+  importMasterKey,
+  requireMasterKeyHex,
+} from "@suite/crypto";
 
 export const app = new Hono();
 
 export function getSigningSecret(): string {
-  return Deno.env.get("TODO_APP_SIGNING_SECRET") ??
-    Deno.env.get("SLACK_SIGNING_SECRET") ??
-    "dev_todo_signing_secret";
+  return requireNonEmptyEnv("TODO_APP_SIGNING_SECRET", [
+    "SLACK_SIGNING_SECRET",
+  ]);
 }
 
 export function getMasterKeyHex(): string {
-  return Deno.env.get("MASTER_ENCRYPTION_KEY_HEX") ??
-    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+  return requireMasterKeyHex();
 }
 
 export async function resolveBotToken(
@@ -672,6 +676,8 @@ app.post(
 export default app;
 
 if (import.meta.main) {
+  getSigningSecret();
+  getMasterKeyHex();
   const port = parseInt(Deno.env.get("PORT") ?? "3003", 10);
   console.log(`Starting Todo App on port ${port}...`);
   Deno.serve({ port }, app.fetch);

@@ -23,22 +23,19 @@ export const APP_CONFIGS: Record<string, AppConfig> = {
   secret: {
     name: "secret-app",
     defaultPorts: [3001, 8081, 8080],
-    defaultSigningSecret: Deno.env.get("SECRET_APP_SIGNING_SECRET") ??
-      "dev_secret_signing_secret",
+    defaultSigningSecret: Deno.env.get("SECRET_APP_SIGNING_SECRET") ?? "",
     appInstance: secretApp,
   },
   queue: {
     name: "queue-app",
     defaultPorts: [3002, 8082, 8080],
-    defaultSigningSecret: Deno.env.get("QUEUE_APP_SIGNING_SECRET") ??
-      "dev_queue_signing_secret",
+    defaultSigningSecret: Deno.env.get("QUEUE_APP_SIGNING_SECRET") ?? "",
     appInstance: queueApp,
   },
   todo: {
     name: "todo-app",
     defaultPorts: [3003, 8083, 8080],
-    defaultSigningSecret: Deno.env.get("TODO_APP_SIGNING_SECRET") ??
-      "dev_todo_signing_secret",
+    defaultSigningSecret: Deno.env.get("TODO_APP_SIGNING_SECRET") ?? "",
     appInstance: todoApp,
   },
 };
@@ -187,6 +184,11 @@ export async function simulateSlashCommand(params: {
 }) {
   const config = APP_CONFIGS[params.appKey];
   const secret = params.signingSecret ?? config.defaultSigningSecret;
+  if (!secret) {
+    throw new Error(
+      `Signing secret for ${config.name} is required. Set the app signing secret in the environment.`,
+    );
+  }
 
   const formParams = new URLSearchParams({
     command: params.command,
@@ -225,6 +227,11 @@ export async function simulateBlockAction(params: {
 }) {
   const config = APP_CONFIGS[params.appKey];
   const secret = params.signingSecret ?? config.defaultSigningSecret;
+  if (!secret) {
+    throw new Error(
+      `Signing secret for ${config.name} is required. Set the app signing secret in the environment.`,
+    );
+  }
 
   const payload = {
     type: "block_actions",
@@ -278,6 +285,11 @@ export async function simulateMessageAction(params: {
 }) {
   const config = APP_CONFIGS[params.appKey];
   const secret = params.signingSecret ?? config.defaultSigningSecret;
+  if (!secret) {
+    throw new Error(
+      `Signing secret for ${config.name} is required. Set the app signing secret in the environment.`,
+    );
+  }
 
   const payload = {
     type: "message_action",
@@ -329,6 +341,11 @@ export async function simulateViewSubmission(params: {
 }) {
   const config = APP_CONFIGS[params.appKey];
   const secret = params.signingSecret ?? config.defaultSigningSecret;
+  if (!secret) {
+    throw new Error(
+      `Signing secret for ${config.name} is required. Set the app signing secret in the environment.`,
+    );
+  }
 
   const payload = {
     type: "view_submission",
@@ -370,6 +387,11 @@ export async function simulateAppHomeOpened(params: {
 }) {
   const config = APP_CONFIGS[params.appKey];
   const secret = params.signingSecret ?? config.defaultSigningSecret;
+  if (!secret) {
+    throw new Error(
+      `Signing secret for ${config.name} is required. Set the app signing secret in the environment.`,
+    );
+  }
 
   const payload = {
     type: "event_callback",

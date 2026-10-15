@@ -386,6 +386,22 @@ export const installationsRepo = {
     `;
     return rows[0];
   },
+
+  async deleteBySlackTeam(
+    slackTeamId: string,
+    appSlug: string,
+    sql: Sql = getSqlWrite(),
+  ): Promise<number> {
+    const rows = await sql<{ id: string }[]>`
+      DELETE FROM workspace_installations
+      WHERE app_slug = ${appSlug}
+        AND workspace_id IN (
+          SELECT id FROM workspaces WHERE slack_team_id = ${slackTeamId}
+        )
+      RETURNING id
+    `;
+    return rows.length;
+  },
 };
 
 /**

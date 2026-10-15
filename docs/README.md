@@ -10,15 +10,15 @@ Validação feita em 14 out 2026 (America/Sao_Paulo).
 
 ## Veredito rápido
 
-1. **Secret** — promissor (prioridade #1)
-2. **Queue** — promissor, nicho DevOps (#2)
-3. **Todo** — fraco sozinho; manter no bundle
+1. **Secret** — promissor (prioridade #1). Produto atual: link de uso único, não mensagem que some do canal.
+2. **Queue** — promissor, nicho DevOps (#2). Fora do ciclo atual; rebrand fica para depois.
+3. **Todo** — pausado. Não é âncora.
 
-## Próximos passos (ordem sugerida)
+## Estado dos seis passos
 
-1. Remover defaults hardcoded de master key / signing secrets
-2. Implementar OAuth v2 multi-workspace + handlers `app_uninstalled` / `tokens_revoked`
-3. Privacy + Support URLs + landing
-4. Corrigir riscos de ack >3s (reveal Secret, `/queue`) e fallback ephemeral com plaintext
-5. Conseguir ≥10 workspaces ativos antes / durante review do Marketplace
-6. Posicionar Secret como *one-time secret links* (não “self-destructing messages”)
+1. **Feito** — master key e signing secrets não têm default. Deploy sem env falha na subida.
+2. **Feito no Secret** — `GET /slack/install`, callback `oauth.v2.access`, `app_uninstalled` e `tokens_revoked`. Falta preencher `SECRET_APP_CLIENT_ID` / `SECRET_APP_CLIENT_SECRET` no deploy.
+3. **Feito no Secret** — `https://secret.bsuit.app/`, `/privacy` e `/support` são servidos pela app.
+4. **Feito no Secret** — o segredo não volta para o Slack. A abertura é `POST /s/:id/open` no browser. O ack do `/queue` continua síncrono.
+5. **Manual** — ainda é preciso ≥10 workspaces ativos (uso nos últimos 28 dias) durante a review. O caminho de install é `/slack/install`.
+6. **Feito** — copy do manifest, modal e páginas falam em one-time secret link. A app não apaga mensagens do Slack.

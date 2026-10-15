@@ -10,12 +10,22 @@ import {
   hexToBytes,
   importMasterKey,
   recombineEphemeralKey,
+  requireMasterKeyHex,
   revealSplitSecret,
   splitEphemeralKey,
 } from "./mod.ts";
 
 const SAMPLE_MASTER_KEY_HEX =
   "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+Deno.test("crypto: requireMasterKeyHex rejects missing and short keys", () => {
+  assertThrows(() => requireMasterKeyHex(""));
+  assertThrows(() => requireMasterKeyHex("abcd"));
+  assertEquals(
+    requireMasterKeyHex(SAMPLE_MASTER_KEY_HEX),
+    SAMPLE_MASTER_KEY_HEX,
+  );
+});
 
 Deno.test("crypto: hex and base64 conversions", () => {
   const bytes = new Uint8Array([0, 15, 255, 128, 42]);

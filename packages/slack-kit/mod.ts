@@ -5,6 +5,21 @@
 
 import type { Context, MiddlewareHandler } from "hono";
 
+/**
+ * Returns the first non-empty environment variable. Throws if all are missing
+ * so signing secrets cannot fall back to a value committed in source.
+ */
+export function requireNonEmptyEnv(
+  name: string,
+  aliases: string[] = [],
+): string {
+  for (const key of [name, ...aliases]) {
+    const value = Deno.env.get(key)?.trim();
+    if (value) return value;
+  }
+  throw new Error(`${name} is required`);
+}
+
 // ============================================================================
 // 1. SIGNATURE VERIFICATION (HMAC-SHA256 via Web Crypto)
 // ============================================================================
@@ -148,6 +163,11 @@ export interface SlackBlock {
     text: string;
   }[];
   accessory?: Record<string, unknown>;
+  hint?: {
+    type: "plain_text";
+    text: string;
+    emoji?: boolean;
+  };
 }
 
 export interface SlackModalView {
@@ -194,20 +214,26 @@ export interface SlackBlockMessagePayload extends SlackMessagePayload {
 
 export function buildSecretModal(options?: {
   defaultChannelId?: string;
+  directMessage?: boolean;
+  responseUrl?: string | null;
   initialContext?: string;
   initialContent?: string;
 }): SlackModalView {
+  const responseUrl = options?.directMessage === true &&
+      options.responseUrl?.startsWith("https://hooks.slack.com/")
+    ? options.responseUrl
+    : null;
   return {
     type: "modal",
     callback_id: "secret_create_modal",
     title: {
       type: "plain_text",
-      text: "🔐 Share a Secret",
+      text: "Create one-time link",
       emoji: true,
     },
     submit: {
       type: "plain_text",
-      text: "Create Secret",
+      text: "Create link",
       emoji: true,
     },
     close: {
@@ -217,14 +243,26 @@ export function buildSecretModal(options?: {
     },
     private_metadata: JSON.stringify({
       channelId: options?.defaultChannelId ?? null,
+      directMessage: options?.directMessage === true,
+      responseUrl,
     }),
     blocks: [
+      {
+        type: "section",
+        block_id: "secret_intro",
+        text: {
+          type: "mrkdwn",
+          text: options?.directMessage
+            ? "This creates a *one-time link* and sends it in this direct message. The secret is not in the message. Secret never posts the link in a channel."
+            : "This creates a *one-time link*. Secret does not post it in this channel. Copy the link and send it in a direct message. The secret is not posted in Slack.",
+        },
+      },
       {
         type: "input",
         block_id: "secret_content_block",
         label: {
           type: "plain_text",
-          text: "Secret Content",
+          text: "Secret",
           emoji: true,
         },
         element: {
@@ -234,8 +272,7 @@ export function buildSecretModal(options?: {
           initial_value: options?.initialContent ?? "",
           placeholder: {
             type: "plain_text",
-            text:
-              "Paste passwords, API keys, private tokens, or sensitive notes...",
+            text: "Password, API key, or other credential",
           },
         },
       },
@@ -245,7 +282,7 @@ export function buildSecretModal(options?: {
         optional: true,
         label: {
           type: "plain_text",
-          text: "Context / Label (Public)",
+          text: "Public label",
           emoji: true,
         },
         element: {
@@ -254,25 +291,7 @@ export function buildSecretModal(options?: {
           initial_value: options?.initialContext ?? "",
           placeholder: {
             type: "plain_text",
-            text: "e.g. Staging DB credentials, Stripe test webhook secret",
-          },
-        },
-      },
-      {
-        type: "input",
-        block_id: "recipient_block",
-        optional: true,
-        label: {
-          type: "plain_text",
-          text: "Restrict to Specific User (Optional)",
-          emoji: true,
-        },
-        element: {
-          type: "users_select",
-          action_id: "recipient_select",
-          placeholder: {
-            type: "plain_text",
-            text: "Select a teammate (leave blank for anyone)",
+            text: "e.g. Staging database password",
           },
         },
       },
@@ -281,19 +300,19 @@ export function buildSecretModal(options?: {
         block_id: "ttl_block",
         label: {
           type: "plain_text",
-          text: "Expiration TTL",
+          text: "Link expires after",
           emoji: true,
         },
         element: {
           type: "static_select",
           action_id: "ttl_select",
           initial_option: {
-            text: { type: "plain_text", text: "1 hour (Recommended)" },
+            text: { type: "plain_text", text: "1 hour" },
             value: "3600",
           },
           options: [
             {
-              text: { type: "plain_text", text: "5 minutes (High Security)" },
+              text: { type: "plain_text", text: "5 minutes" },
               value: "300",
             },
             {
@@ -301,7 +320,7 @@ export function buildSecretModal(options?: {
               value: "900",
             },
             {
-              text: { type: "plain_text", text: "1 hour (Recommended)" },
+              text: { type: "plain_text", text: "1 hour" },
               value: "3600",
             },
             {
@@ -320,27 +339,27 @@ export function buildSecretModal(options?: {
         block_id: "views_block",
         label: {
           type: "plain_text",
-          text: "View Limit Policy",
+          text: "How many opens",
           emoji: true,
         },
         element: {
           type: "static_select",
           action_id: "views_select",
           initial_option: {
-            text: { type: "plain_text", text: "1 view (Burn on Read)" },
+            text: { type: "plain_text", text: "1 open" },
             value: "1",
           },
           options: [
             {
-              text: { type: "plain_text", text: "1 view (Burn on Read)" },
+              text: { type: "plain_text", text: "1 open" },
               value: "1",
             },
             {
-              text: { type: "plain_text", text: "5 views (Team Share)" },
+              text: { type: "plain_text", text: "5 opens" },
               value: "5",
             },
             {
-              text: { type: "plain_text", text: "10 views" },
+              text: { type: "plain_text", text: "10 opens" },
               value: "10",
             },
           ],
@@ -350,35 +369,135 @@ export function buildSecretModal(options?: {
   };
 }
 
-export function buildSecretActiveCard(params: {
-  creatorSlackId: string;
-  secretId: string;
-  clientKeyHex: string;
-  contextLabel?: string;
-  allowedRecipientSlackId?: string | null;
+export function buildSecretDirectMessage(params: {
+  linkUrl: string;
   ttlMinutes: number;
   remainingViews: number;
+  contextLabel?: string;
 }): SlackBlockMessagePayload {
-  const contextDesc = params.contextLabel
-    ? `*📌 Context:* ${params.contextLabel}\n`
-    : "";
-  const recipientDesc = params.allowedRecipientSlackId
-    ? `*🛡️ Access:* Restricted to <@${params.allowedRecipientSlackId}>\n`
-    : `*🛡️ Access:* Anyone with access to this conversation\n`;
-  const policyDesc = params.remainingViews === 1
-    ? `*⏳ Policy:* Burns after 1 view (Auto-destroys in ${params.ttlMinutes}m)`
-    : `*⏳ Policy:* Burns after ${params.remainingViews} views (Auto-destroys in ${params.ttlMinutes}m)`;
-
+  const label = params.contextLabel ? `*Label:* ${params.contextLabel}\n` : "";
+  const opens = params.remainingViews === 1
+    ? "1 open"
+    : `${params.remainingViews} opens`;
   return {
-    response_type: "in_channel",
-    text: `🔐 <@${params.creatorSlackId}> shared an encrypted secret`,
+    text: `One-time secret link: ${params.linkUrl}`,
     blocks: [
       {
         type: "section",
         text: {
           type: "mrkdwn",
           text:
-            `🔐 *<@${params.creatorSlackId}> shared an encrypted secret*\n\n${contextDesc}${recipientDesc}${policyDesc}`,
+            `*One-time secret link*\n${label}*Opens:* ${opens}\n*Expires in:* ${params.ttlMinutes} minutes\nThe secret is not in this message. Copy the full link, including the part after #:\n\`${params.linkUrl}\``,
+        },
+      },
+    ],
+  };
+}
+
+export function buildSecretLinkReadyModal(params: {
+  linkUrl: string;
+  secretId: string;
+  ttlMinutes: number;
+  remainingViews: number;
+  contextLabel?: string;
+  postedInDirectMessage?: boolean;
+}): SlackModalView {
+  const label = params.contextLabel ? `*Label:* ${params.contextLabel}\n` : "";
+  const opens = params.remainingViews === 1
+    ? "1 open"
+    : `${params.remainingViews} opens`;
+  const delivery = params.postedInDirectMessage
+    ? "Sent in this direct message."
+    : "Not sent in a channel. Copy it and send it in a direct message.";
+  return {
+    type: "modal",
+    callback_id: "secret_link_ready_modal",
+    title: {
+      type: "plain_text",
+      text: "Your one-time link",
+      emoji: true,
+    },
+    close: {
+      type: "plain_text",
+      text: "Done",
+      emoji: true,
+    },
+    private_metadata: JSON.stringify({ secretId: params.secretId }),
+    blocks: [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text:
+            `${label}${delivery}\nIt works for *${opens}* and expires in *${params.ttlMinutes} minutes*. The secret is not in this view.`,
+        },
+      },
+      {
+        type: "input",
+        block_id: "secret_link_block",
+        label: {
+          type: "plain_text",
+          text: "Copy link",
+          emoji: true,
+        },
+        element: {
+          type: "plain_text_input",
+          action_id: "secret_link_input",
+          multiline: true,
+          initial_value: params.linkUrl,
+          focus_on_load: true,
+        },
+        hint: {
+          type: "plain_text",
+          text: "Select the full link, including the part after #.",
+        },
+      },
+      {
+        type: "actions",
+        block_id: "secret_link_actions",
+        elements: [
+          {
+            type: "button",
+            action_id: "secret_revoke_click",
+            text: {
+              type: "plain_text",
+              text: "Destroy link",
+              emoji: true,
+            },
+            style: "danger",
+            value: params.secretId,
+          },
+        ],
+      },
+    ],
+  };
+}
+
+export function buildSecretActiveCard(params: {
+  creatorSlackId: string;
+  secretId: string;
+  linkUrl: string;
+  contextLabel?: string;
+  ttlMinutes: number;
+  remainingViews: number;
+}): SlackBlockMessagePayload {
+  const contextDesc = params.contextLabel
+    ? `*Label:* ${params.contextLabel}\n`
+    : "";
+  const opens = params.remainingViews === 1
+    ? "1 open"
+    : `${params.remainingViews} opens`;
+
+  return {
+    response_type: "ephemeral",
+    text: `One-time secret link from <@${params.creatorSlackId}>`,
+    blocks: [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text:
+            `*<@${params.creatorSlackId}> created a one-time secret link*\n\n${contextDesc}*Opens:* ${opens}\n*Expires in:* ${params.ttlMinutes} minutes\nThe secret is not in this message. Paste the link to share it:\n\`${params.linkUrl}\``,
         },
       },
       {
@@ -387,21 +506,10 @@ export function buildSecretActiveCard(params: {
         elements: [
           {
             type: "button",
-            action_id: "secret_reveal_click",
-            text: {
-              type: "plain_text",
-              text: "👁️ Reveal Secret",
-              emoji: true,
-            },
-            style: "primary",
-            value: `${params.secretId}:${params.clientKeyHex}`,
-          },
-          {
-            type: "button",
             action_id: "secret_revoke_click",
             text: {
               type: "plain_text",
-              text: "🗑️ Revoke & Destroy",
+              text: "Destroy link",
               emoji: true,
             },
             style: "danger",
@@ -466,48 +574,6 @@ export function buildSecretRevealedModal(params: {
   };
 }
 
-export function buildSecretRevealedEphemeral(params: {
-  plaintext: string;
-  creatorSlackId: string;
-  destroyedAtIso: string;
-  remainingViews?: number;
-}): SlackBlockMessagePayload {
-  const isLastView = !params.remainingViews || params.remainingViews <= 0;
-  const warningText = isLastView
-    ? "⚠️ *WARNING: This secret has been permanently purged from server memory.*\nCopy the value below before switching channels."
-    : `ℹ️ *Secret Revealed.* Remaining views: *${params.remainingViews}*.`;
-
-  return {
-    response_type: "ephemeral",
-    text: "🔓 Decrypted Secret",
-    blocks: [
-      {
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text: `🔓 *Decrypted Secret*\n${warningText}`,
-        },
-      },
-      {
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text: `\`\`\`\n${params.plaintext}\n\`\`\``,
-        },
-      },
-      {
-        type: "context",
-        elements: [
-          {
-            type: "mrkdwn",
-            text: `Shared by: <@${params.creatorSlackId}> • Processed at: ${params.destroyedAtIso}`,
-          },
-        ],
-      },
-    ],
-  };
-}
-
 export function buildSecretBurnedCard(params: {
   contextLabel?: string;
   viewerSlackId?: string;
@@ -516,33 +582,32 @@ export function buildSecretBurnedCard(params: {
   wasExpired?: boolean;
 }): SlackBlockMessagePayload {
   const title = params.wasRevoked
-    ? "🔒 *Encrypted Secret (Revoked & Destroyed)*"
+    ? "*One-time link destroyed*"
     : params.wasExpired
-    ? "🔒 *Encrypted Secret (Expired & Purged)*"
-    : "🔒 *Encrypted Secret (Permanently Destroyed)*";
+    ? "*One-time link expired*"
+    : "*One-time link already opened*";
 
   const contextText = params.contextLabel
     ? `*📌 Context:* ${params.contextLabel}\n`
     : "";
 
   const statusText = params.wasRevoked
-    ? `*🔴 Status:* Revoked and permanently purged.`
+    ? "The link can no longer be opened. No Slack message was deleted."
     : params.wasExpired
-    ? `*🔴 Status:* Expired by TTL policy and permanently purged from server memory.`
-    : `*🔴 Status:* Viewed by <@${
-      params.viewerSlackId ?? "a teammate"
-    }> on ${params.burnedAtIso}`;
+    ? "The link expired before it was opened. No Slack message was deleted."
+    : `Opened by <@${
+      params.viewerSlackId ?? "someone"
+    }> on ${params.burnedAtIso}. No Slack message was deleted.`;
 
   return {
     replace_original: true,
-    text: "🔒 Encrypted Secret (Permanently Destroyed)",
+    text: "One-time link is no longer available",
     blocks: [
       {
         type: "section",
         text: {
           type: "mrkdwn",
-          text:
-            `${title}\n\n${contextText}${statusText}\n*🧹 Cryptographic payload purged from memory.*`,
+          text: `${title}\n\n${contextText}${statusText}`,
         },
       },
     ],
@@ -708,9 +773,10 @@ export function buildQueueUserActionsEphemeral(params: {
       type: "section",
       text: {
         type: "mrkdwn",
-        text:
-          `⚡ *Active Lock Controls for #${params.channelName}*\n` +
-          `You currently hold the active slot. ⏳ Auto-expires in *${params.expiresInMinutes ?? 0}m*.`,
+        text: `⚡ *Active Lock Controls for #${params.channelName}*\n` +
+          `You currently hold the active slot. ⏳ Auto-expires in *${
+            params.expiresInMinutes ?? 0
+          }m*.`,
       },
     });
 
@@ -747,9 +813,12 @@ export function buildQueueUserActionsEphemeral(params: {
       type: "section",
       text: {
         type: "mrkdwn",
-        text:
-          `📋 *Waiting Line Status for #${params.channelName}*\n` +
-          `You are currently *#${params.waitingPosition ?? 1}* in line (waiting for ${params.waitingMinutes ?? 0}m). We'll notify you as soon as you're up!`,
+        text: `📋 *Waiting Line Status for #${params.channelName}*\n` +
+          `You are currently *#${
+            params.waitingPosition ?? 1
+          }* in line (waiting for ${
+            params.waitingMinutes ?? 0
+          }m). We'll notify you as soon as you're up!`,
       },
     });
 
@@ -765,8 +834,7 @@ export function buildQueueUserActionsEphemeral(params: {
       type: "section",
       text: {
         type: "mrkdwn",
-        text:
-          `ℹ️ *Queue Actions for #${params.channelName}*\n` +
+        text: `ℹ️ *Queue Actions for #${params.channelName}*\n` +
           `You are not currently in the queue.`,
       },
     });
@@ -894,29 +962,51 @@ export function buildQueueConfigModal(params: {
   adminUserIds: string[];
 }): SlackModalView {
   const concurrencyOptions = [
-    { text: { type: "plain_text" as const, text: "1 slot (Exclusive Mutex)" }, value: "1" },
-    { text: { type: "plain_text" as const, text: "2 concurrent slots" }, value: "2" },
-    { text: { type: "plain_text" as const, text: "3 concurrent slots" }, value: "3" },
-    { text: { type: "plain_text" as const, text: "4 concurrent slots" }, value: "4" },
-    { text: { type: "plain_text" as const, text: "5 concurrent slots" }, value: "5" },
+    {
+      text: { type: "plain_text" as const, text: "1 slot (Exclusive Mutex)" },
+      value: "1",
+    },
+    {
+      text: { type: "plain_text" as const, text: "2 concurrent slots" },
+      value: "2",
+    },
+    {
+      text: { type: "plain_text" as const, text: "3 concurrent slots" },
+      value: "3",
+    },
+    {
+      text: { type: "plain_text" as const, text: "4 concurrent slots" },
+      value: "4",
+    },
+    {
+      text: { type: "plain_text" as const, text: "5 concurrent slots" },
+      value: "5",
+    },
   ];
   const initialConcurrencyOption =
     concurrencyOptions.find((o) => o.value === String(params.maxConcurrency)) ??
-    concurrencyOptions[0];
+      concurrencyOptions[0];
 
   const holdOptions = [
     { text: { type: "plain_text" as const, text: "15 minutes" }, value: "15" },
     { text: { type: "plain_text" as const, text: "30 minutes" }, value: "30" },
     { text: { type: "plain_text" as const, text: "45 minutes" }, value: "45" },
-    { text: { type: "plain_text" as const, text: "60 minutes (1 hour)" }, value: "60" },
-    { text: { type: "plain_text" as const, text: "120 minutes (2 hours)" }, value: "120" },
+    {
+      text: { type: "plain_text" as const, text: "60 minutes (1 hour)" },
+      value: "60",
+    },
+    {
+      text: { type: "plain_text" as const, text: "120 minutes (2 hours)" },
+      value: "120",
+    },
   ];
   const initialHoldOption =
     holdOptions.find((o) => o.value === String(params.maxHoldMinutes)) ??
-    holdOptions[2]; // Default 45m
+      holdOptions[2]; // Default 45m
 
   const validAdminUserIds = params.adminUserIds.filter(
-    (id) => typeof id === "string" && id.trim().length > 0 && !id.startsWith("B"),
+    (id) =>
+      typeof id === "string" && id.trim().length > 0 && !id.startsWith("B"),
   );
 
   return {
@@ -1005,17 +1095,17 @@ export function buildQueueConfigModal(params: {
           ],
           ...(params.allowSecret
             ? {
-                initial_options: [
-                  {
-                    text: {
-                      type: "plain_text",
-                      text: "Enable Ephemeral Secret button in queue actions",
-                      emoji: true,
-                    },
-                    value: "allow_secret",
+              initial_options: [
+                {
+                  text: {
+                    type: "plain_text",
+                    text: "Enable Ephemeral Secret button in queue actions",
+                    emoji: true,
                   },
-                ],
-              }
+                  value: "allow_secret",
+                },
+              ],
+            }
             : {}),
         },
         label: {
@@ -1050,7 +1140,8 @@ export function buildQueueConfigModal(params: {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: "*⚠️ Danger Zone*\nRemoving the queue terminates the channel card and cancels all active slots and waiting lines.",
+          text:
+            "*⚠️ Danger Zone*\nRemoving the queue terminates the channel card and cancels all active slots and waiting lines.",
         },
         accessory: {
           type: "button",
@@ -1089,7 +1180,8 @@ export function buildQueueDeleteConfirmModal(params: {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `⚠️ *Are you sure you want to remove the queue for #${params.channelName}?*\n\n` +
+          text:
+            `⚠️ *Are you sure you want to remove the queue for #${params.channelName}?*\n\n` +
             `• The sticky card in the channel will be permanently deleted.\n` +
             `• All active holds and waiting teammates will be released.\n` +
             `• Any scheduled auto-expiration timers will be cancelled immediately.\n\n` +
@@ -1308,25 +1400,25 @@ export function buildQueueHomeView(params: {
 
       const accessory: Record<string, unknown> = q.isAdmin
         ? {
-            type: "button",
-            action_id: "queue_config_click",
-            text: {
-              type: "plain_text",
-              text: "⚙️ Settings",
-              emoji: true,
-            },
-            value: q.queueId,
-          }
+          type: "button",
+          action_id: "queue_config_click",
+          text: {
+            type: "plain_text",
+            text: "⚙️ Settings",
+            emoji: true,
+          },
+          value: q.queueId,
+        }
         : {
-            type: "button",
-            action_id: "queue_my_actions_click",
-            text: {
-              type: "plain_text",
-              text: "⚡ View Actions",
-              emoji: true,
-            },
-            value: q.queueId,
-          };
+          type: "button",
+          action_id: "queue_my_actions_click",
+          text: {
+            type: "plain_text",
+            text: "⚡ View Actions",
+            emoji: true,
+          },
+          value: q.queueId,
+        };
 
       blocks.push({
         type: "section",

@@ -30,7 +30,7 @@ infra/
 │   ├── data.tf                     # data "terraform_remote_state" "foundation" (lê outputs da 01-foundation)
 │   ├── locals.tf                   # Decodificação do kubeconfig e filtro de projetos habilitados (enabled = true)
 │   ├── providers.tf                # Providers kubernetes e helm autenticados dinamicamente
-│   ├── variables.tf                # Mapa `projects` (enabled, image_tag, replicas, signing_secret por projeto!)
+│   ├── variables.tf                # Mapa `projects` (enabled, replicas, signing_secret por projeto!)
 │   ├── docker-build.tf             # Escopo: Compila (linux/amd64) e faz push no GHCR apenas dos projetos ativos!
 │   ├── namespace.tf                # Escopo: Namespace Kubernetes `slack-suite`
 │   ├── secrets.tf                  # Escopo: Geração de senhas criptográficas + Secret `ghcr-secret`
@@ -71,7 +71,7 @@ infra/
 
 ## 3. Como Funciona o Deploy por Projeto e Tags Independentes (`02-releases`)
 
-Agora você **não precisa** fazer build nem deploy de todos os bots de uma vez, e cada projeto tem sua própria `image_tag`!
+Agora você **não precisa** fazer build nem deploy de todos os bots de uma vez. A tag de cada imagem é o hash do código que aquele processo executa: a pasta do app, os pacotes que ele importa e os arquivos comuns de build (`Dockerfile`, `deno.json`, `deno.lock`). O SHA do commit fica só no rótulo `org.opencontainers.image.revision`.
 
 No arquivo [`infra/02-releases/terraform.tfvars`](file:///Users/leonardobenedet/Code/BenedetLabsBots/infra/02-releases/terraform.tfvars.example):
 
@@ -84,39 +84,36 @@ openobserve_admin_email = "benedetlabs@gmail.com"
 projects = {
   "secret-app" = {
     enabled        = true
-    image_tag      = "v1.0.0"
     replicas       = 2
     signing_secret = "SEU_SLACK_SECRET_SIGNING"
   }
   "queue-app" = {
     enabled        = false # Desativado: não faz docker build nem cria pods no K8s!
-    image_tag      = "v1.0.0"
     replicas       = 2
     signing_secret = ""
   }
   "todo-app" = {
     enabled        = false # Desativado: não faz docker build nem cria pods no K8s!
-    image_tag      = "v1.0.0"
     replicas       = 2
     signing_secret = ""
   }
 }
 
 worker = {
-  enabled   = true
-  image_tag = "v1.0.0"
-  replicas  = 2
+  enabled  = true
+  replicas = 2
 }
 ```
 
 ### O que acontece quando você roda `terraform -chdir=infra/02-releases apply`?
-1. **Build Seletivo Automático ([`docker-build.tf`](file:///Users/leonardobenedet/Code/BenedetLabsBots/infra/02-releases/docker-build.tf)):**
+1. **Build seletivo automático ([`docker-build.tf`](infra/02-releases/docker-build.tf)):**
    * O Terraform olha apenas os projetos com `enabled = true` (no exemplo acima, apenas `secret-app` e `outbox-worker`).
-   * Ele faz login no `ghcr.io`, executa o `docker buildx build --platform linux/amd64` para cada projeto ativo e faz o push para `ghcr.io/benedetlabs/<projeto>:<image_tag>`.
+   * Ele faz login no `ghcr.io`, executa o `docker buildx build --platform linux/amd64` só para o projeto habilitado cuja tag mudou, e faz o push para `ghcr.io/benedetlabs/<projeto>:<hash-do-código>`.
    * Os projetos com `enabled = false` (`queue-app` e `todo-app`) são ignorados: não gastam tempo de build, não exigem `signing_secret` e não criam Pods/Services no cluster!
-2. **Atualização Cirúrgica por Tag:**
-   * Se amanhã você mudar apenas a tag do `secret-app` para `image_tag = "v1.0.1"` e rodar `terraform -chdir=infra/02-releases apply`:
-   * O Terraform **só recompila a imagem do `secret-app:v1.0.1`** (sem tocar na imagem do `outbox-worker` nem dos outros bots) e o Helm faz o *RollingUpdate* **apenas dos pods do `secret-app`**!
+2. **Rolling update só de quem mudou:**
+   * Mudança em `apps/secret-app` troca só o Secret. Mudança em `packages/crypto`, `db`, `outbox` ou `slack-kit` troca os apps habilitados, porque todos importam esses pacotes.
+   * O worker também importa `apps/queue-app/main.ts`, então mudança no Queue republica o worker. `packages/billing` não entra em nenhuma imagem.
+   * Não há `image_tag` semver para incrementar.
 
 ---
 

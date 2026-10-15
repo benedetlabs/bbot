@@ -1,24 +1,29 @@
 /**
  * @module @apps/secret-app
- * Production Hono server for Secret - The Zero-Knowledge Ephemeral Secret Sharing Slack App.
+ * Slack app that creates one-time secret links. The secret is not posted
+ * back into Slack, and Slack messages are not deleted.
  */
 
 import { Hono } from "hono";
 import {
+  bytesToHex,
   createSplitSecret,
   decryptOAuthToken,
+  encryptOAuthToken,
+  generateRandomBytes,
   importMasterKey,
+  requireMasterKeyHex,
   revealSplitSecret,
 } from "@suite/crypto";
 import {
-  buildSecretActiveCard,
-  buildSecretBurnedCard,
+  buildSecretDirectMessage,
+  buildSecretLinkReadyModal,
   buildSecretModal,
-  buildSecretRevealedEphemeral,
-  buildSecretRevealedModal,
+  requireNonEmptyEnv,
   slackApi,
   slackModalClear,
   slackModalErrors,
+  slackModalUpdate,
   slackSignatureMiddleware,
 } from "@suite/slack-kit";
 import {
@@ -27,27 +32,124 @@ import {
   mauRepo,
   secretAuditRepo,
   type SecretKVPayload,
-  sqlWrite,
   workspacesRepo,
 } from "@suite/db";
-import { enqueueOutboxEvent } from "@suite/outbox";
+import {
+  installedPage,
+  landingPage,
+  linkUnavailablePage,
+  oauthErrorPage,
+  privacyPage,
+  revealPage,
+  supportPage,
+  type LinkUnavailableReason,
+} from "./pages.ts";
 
 export const app = new Hono();
 
+const BOT_SCOPES = "commands,chat:write,chat:write.public";
+
 export function getSigningSecret(): string {
-  return Deno.env.get("SECRET_APP_SIGNING_SECRET") ??
-    Deno.env.get("SLACK_SIGNING_SECRET") ??
-    "dev_secret_signing_secret";
+  return requireNonEmptyEnv("SECRET_APP_SIGNING_SECRET", [
+    "SLACK_SIGNING_SECRET",
+  ]);
 }
 
 export function getMasterKeyHex(): string {
-  return Deno.env.get("MASTER_ENCRYPTION_KEY_HEX") ??
-    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+  return requireMasterKeyHex();
 }
 
-// ----------------------------------------------------------------------------
-// Health Check
-// ----------------------------------------------------------------------------
+export function publicBaseUrl(): string {
+  const raw = Deno.env.get("SECRET_PUBLIC_BASE_URL")?.trim() ||
+    "https://secret.bsuit.app";
+  return raw.replace(/\/$/, "");
+}
+
+function secretLink(secretId: string, clientKeyHex: string): string {
+  return `${publicBaseUrl()}/s/${secretId}#${clientKeyHex}`;
+}
+
+function linkStatusKey(secretId: string): string {
+  return `link-status:${secretId}`;
+}
+
+function isDirectMessage(channelId: string, channelName: string): boolean {
+  return channelId.startsWith("D") || channelName === "directmessage";
+}
+
+function directMessageResponseUrl(metadata: string | undefined): string | null {
+  if (!metadata) return null;
+  try {
+    const parsed = JSON.parse(metadata) as {
+      directMessage?: boolean;
+      responseUrl?: string | null;
+    };
+    const responseUrl = parsed.responseUrl ?? "";
+    if (
+      parsed.directMessage === true &&
+      responseUrl.startsWith("https://hooks.slack.com/")
+    ) {
+      return responseUrl;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+async function rememberLinkOutcome(
+  secretId: string,
+  status: "used" | "revoked",
+): Promise<void> {
+  await kv.set(linkStatusKey(secretId), { status }, 60 * 60 * 24 * 30);
+}
+
+async function linkVisitState(
+  secretId: string,
+): Promise<"active" | LinkUnavailableReason> {
+  const row = await kv.lookup(secretId);
+  if (row?.status === "active") return "active";
+  if (row?.status === "expired") return "expired";
+  const tombstone = await kv.get<{ status?: string }>(linkStatusKey(secretId));
+  if (tombstone?.status === "used") return "used";
+  if (tombstone?.status === "revoked") return "destroyed";
+  return "missing";
+}
+
+function html(body: string, status = 200) {
+  return new Response(body, {
+    status,
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "referrer-policy": "no-referrer",
+      "x-robots-tag": "noindex",
+      "cache-control": "no-store",
+    },
+  });
+}
+
+async function resolveBotToken(teamId: string): Promise<string | null> {
+  const envToken = Deno.env.get("SECRET_APP_BOT_TOKEN") ??
+    Deno.env.get("SLACK_BOT_TOKEN");
+  if (envToken) return envToken;
+  if (!teamId) return null;
+  const install = await installationsRepo.findInstallation(teamId, "secret");
+  if (!install?.installation.bot_access_token_enc) return null;
+  const masterKey = await importMasterKey(getMasterKeyHex());
+  return await decryptOAuthToken(
+    install.installation.bot_access_token_enc,
+    masterKey,
+  );
+}
+
+async function revokeInstallation(teamId: string): Promise<void> {
+  const workspace = await workspacesRepo.findBySlackTeamId(teamId);
+  await installationsRepo.deleteBySlackTeam(teamId, "secret");
+  if (workspace) {
+    await kv.deleteByWorkspaceId(workspace.id);
+  }
+}
+
 app.get("/healthz", (c) => {
   return c.json({
     status: "ok",
@@ -56,9 +158,178 @@ app.get("/healthz", (c) => {
   });
 });
 
-// ----------------------------------------------------------------------------
-// Slack Slash Command: /secret
-// ----------------------------------------------------------------------------
+app.get("/", () => html(landingPage()));
+app.get("/privacy", () => html(privacyPage()));
+app.get("/support", () => html(supportPage()));
+
+app.get("/s/:id", async (c) => {
+  const secretId = c.req.param("id");
+  if (!/^[0-9a-fA-F-]{36}$/.test(secretId)) {
+    return html(linkUnavailablePage("missing"), 404);
+  }
+  const state = await linkVisitState(secretId);
+  if (state !== "active") {
+    return html(linkUnavailablePage(state), state === "missing" ? 404 : 410);
+  }
+  return html(revealPage(secretId));
+});
+
+app.post("/s/:id/open", async (c) => {
+  c.header("Cache-Control", "no-store");
+  c.header("Referrer-Policy", "no-referrer");
+  const secretId = c.req.param("id");
+  if (!/^[0-9a-fA-F-]{36}$/.test(secretId)) {
+    return c.json({ error: "gone" }, 410);
+  }
+
+  let body: { clientKeyHex?: string };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "invalid" }, 400);
+  }
+  const clientKeyHex = String(body.clientKeyHex ?? "");
+  if (!/^[0-9a-fA-F]{32}$/.test(clientKeyHex)) {
+    return c.json({ error: "invalid" }, 400);
+  }
+
+  const peeked = await kv.get<SecretKVPayload>(secretId);
+  if (!peeked) {
+    const state = await linkVisitState(secretId);
+    const reason: LinkUnavailableReason = state === "active"
+      ? "missing"
+      : state;
+    return c.json({ error: "gone", reason }, 410);
+  }
+
+  let plaintext: string;
+  try {
+    const masterKey = await importMasterKey(getMasterKeyHex());
+    plaintext = await revealSplitSecret(
+      {
+        ciphertextBase64: peeked.ciphertextBase64,
+        ivBase64: peeked.ivBase64,
+        encryptedServerKeyBase64: peeked.encryptedServerKeyBase64,
+        serverKeyIvBase64: peeked.serverKeyIvBase64,
+      },
+      clientKeyHex,
+      masterKey,
+    );
+  } catch {
+    console.error("Link open failed integrity check");
+    return c.json({ error: "invalid" }, 400);
+  }
+
+  const stored = await kv.consumeMultiViewSecret<SecretKVPayload>(secretId);
+  if (!stored) {
+    const state = await linkVisitState(secretId);
+    const reason: LinkUnavailableReason = state === "active" ? "used" : state;
+    return c.json({ error: "gone", reason }, 410);
+  }
+  if (stored.burned) {
+    await rememberLinkOutcome(secretId, "used");
+  }
+
+  if (stored.value.auditLogId || stored.value.workspaceId) {
+    secretAuditRepo.recordBurned({
+      secretEphemeralId: secretId,
+      viewerSlackUserId: "link",
+      status: "viewed",
+    }).catch((err) => console.error("Failed to record link open:", err));
+  }
+  return c.json({
+    plaintext,
+    remainingViews: stored.remainingViews,
+    burned: stored.burned,
+  });
+});
+
+app.get("/slack/install", async (c) => {
+  const clientId = Deno.env.get("SECRET_APP_CLIENT_ID")?.trim() ?? "";
+  if (!clientId) {
+    return html(oauthErrorPage("OAuth client id is not configured."), 503);
+  }
+  const state = bytesToHex(generateRandomBytes(16));
+  await kv.set(`oauth_state:${state}`, { purpose: "secret_install" }, 600);
+  const redirectUri = `${publicBaseUrl()}/slack/oauth/callback`;
+  const url = new URL("https://slack.com/oauth/v2/authorize");
+  url.searchParams.set("client_id", clientId);
+  url.searchParams.set("scope", BOT_SCOPES);
+  url.searchParams.set("redirect_uri", redirectUri);
+  url.searchParams.set("state", state);
+  return c.redirect(url.toString());
+});
+
+app.get("/slack/oauth/callback", async (c) => {
+  if (c.req.query("error")) {
+    return html(oauthErrorPage("Slack did not authorize the install."), 400);
+  }
+  const code = c.req.query("code") ?? "";
+  const state = c.req.query("state") ?? "";
+  if (!code || !state) {
+    return html(oauthErrorPage("Missing OAuth code or state."), 400);
+  }
+
+  const stateKey = `oauth_state:${state}`;
+  const saved = await kv.get<{ purpose?: string }>(stateKey);
+  await kv.delete(stateKey);
+  if (!saved || saved.purpose !== "secret_install") {
+    return html(
+      oauthErrorPage(
+        "This install link expired. Start again from Add to Slack.",
+      ),
+      400,
+    );
+  }
+
+  const clientId = Deno.env.get("SECRET_APP_CLIENT_ID")?.trim() ?? "";
+  const clientSecret = Deno.env.get("SECRET_APP_CLIENT_SECRET")?.trim() ?? "";
+  if (!clientId || !clientSecret) {
+    return html(oauthErrorPage("OAuth client is not configured."), 503);
+  }
+
+  const redirectUri = `${publicBaseUrl()}/slack/oauth/callback`;
+  const tokenResponse = await fetch("https://slack.com/api/oauth.v2.access", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      code,
+      redirect_uri: redirectUri,
+    }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  const data = await tokenResponse.json();
+  if (!data.ok || !data.access_token || !data.team?.id || !data.bot_user_id) {
+    return html(oauthErrorPage("Slack rejected the authorization code."), 400);
+  }
+
+  const masterKey = await importMasterKey(getMasterKeyHex());
+  const tokenEnc = await encryptOAuthToken(
+    String(data.access_token),
+    masterKey,
+  );
+  const workspace = await workspacesRepo.upsert({
+    slackTeamId: String(data.team.id),
+    teamName: String(data.team.name ?? data.team.id),
+    slackEnterpriseId: data.enterprise?.id ? String(data.enterprise.id) : null,
+  });
+  const scopes = String(data.scope ?? "")
+    .split(",")
+    .map((scope: string) => scope.trim())
+    .filter(Boolean);
+  await installationsRepo.upsert({
+    workspaceId: workspace.id,
+    appSlug: "secret",
+    botUserId: String(data.bot_user_id),
+    botAccessTokenEnc: tokenEnc,
+    installedByUserId: String(data.authed_user?.id ?? data.bot_user_id),
+    scopes,
+  });
+  return html(installedPage(String(data.team.name ?? data.team.id)));
+});
+
 app.post(
   "/slack/commands",
   slackSignatureMiddleware(getSigningSecret),
@@ -67,6 +338,7 @@ app.post(
     const command = String(formData["command"] ?? "");
     const triggerId = String(formData["trigger_id"] ?? "");
     const channelId = String(formData["channel_id"] ?? "");
+    const channelName = String(formData["channel_name"] ?? "");
     const text = String(formData["text"] ?? "").trim();
     const teamId = String(formData["team_id"] ?? "");
     const userId = String(formData["user_id"] ?? "");
@@ -75,75 +347,48 @@ app.post(
       return c.text("Unknown command", 400);
     }
 
-    // Modal view specification
+    const directMessage = isDirectMessage(channelId, channelName);
     const modalView = buildSecretModal({
       defaultChannelId: channelId,
+      directMessage,
+      responseUrl: directMessage ? String(formData["response_url"] ?? "") : null,
       initialContent: text,
     });
 
-    // Record MAU tracking asynchronously
     if (teamId && userId) {
       workspacesRepo.findBySlackTeamId(teamId).then(async (ws) => {
         const workspace = ws ?? await workspacesRepo.upsert({
           slackTeamId: teamId,
-          teamName: String(formData["team_domain"] ?? "Default Workspace"),
+          teamName: String(formData["team_domain"] ?? teamId),
         });
         await mauRepo.recordUserInteraction({
           workspaceId: workspace.id,
           slackUserId: userId,
           appSlug: "secret",
         });
-      }).catch((err) =>
-        console.error("MAU tracking failed for /secret command:", err)
-      );
+      }).catch((err) => console.error("MAU tracking failed for /secret:", err));
     }
 
-    // If trigger_id is present, open modal via Slack API asynchronously and return 200 immediately
     if (triggerId) {
-      const botTokenPromise = (async () => {
-        let token = Deno.env.get("SECRET_APP_BOT_TOKEN") ??
-          Deno.env.get("SLACK_BOT_TOKEN");
-        if (!token && teamId) {
-          try {
-            const install = await installationsRepo.findInstallation(
-              teamId,
-              "secret",
-            );
-            if (install?.installation.bot_access_token_enc) {
-              const masterKey = await importMasterKey(getMasterKeyHex());
-              token = await decryptOAuthToken(
-                install.installation.bot_access_token_enc,
-                masterKey,
-              );
-            }
-          } catch (err) {
-            console.error("Failed to query installation for views.open:", err);
-          }
-        }
-        return token;
-      })();
-
-      // Fire modal open in background so Slack command responds well under 3000ms SLA
-      (async () => {
+      const openModal = (async () => {
         try {
-          const token = await botTokenPromise;
-          if (token) {
-            const res = await slackApi.openView(token, triggerId, modalView);
-            if (!res.ok) {
-              console.error("Slack views.open returned error:", res.error);
-            }
-          } else {
-            console.warn("No bot token available to open modal for /secret command");
+          const token = await resolveBotToken(teamId);
+          if (!token) {
+            console.warn("No bot token available to open /secret modal");
+            return;
+          }
+          const res = await slackApi.openView(token, triggerId, modalView);
+          if (!res.ok) {
+            console.error("Slack views.open returned error:", res.error);
           }
         } catch (err) {
-          console.error("Failed to open modal via views.open in background:", err);
+          console.error("Failed to open /secret modal:", err);
         }
       })();
-
+      void openModal;
       return c.body(null, 200);
     }
 
-    // Return modal view for unit tests or clients when trigger_id is not provided
     return c.json({
       response_action: "open",
       view: modalView,
@@ -151,9 +396,6 @@ app.post(
   },
 );
 
-// ----------------------------------------------------------------------------
-// Slack Interactive Components (Modals & Buttons)
-// ----------------------------------------------------------------------------
 app.post(
   "/slack/interactions",
   slackSignatureMiddleware(getSigningSecret),
@@ -169,20 +411,21 @@ app.post(
       const body = await c.req.parseBody();
       payloadStr = String(body["payload"] ?? "");
     }
-
-    if (!payloadStr) {
-      return c.text("Missing payload", 400);
-    }
+    if (!payloadStr) return c.text("Missing payload", 400);
 
     const payload = JSON.parse(payloadStr);
     const type = payload.type;
 
-    // 1. MODAL SUBMISSION: User submits secret in modal
     if (type === "view_submission") {
       const view = payload.view;
       const values = view.state?.values ?? {};
       const user = payload.user;
-      const teamId = payload.team?.id ?? "T_DEFAULT";
+      const teamId = payload.team?.id;
+      if (!teamId) {
+        return c.json(slackModalErrors({
+          secret_content_block: "Missing Slack workspace.",
+        }));
+      }
 
       const secretContent =
         values["secret_content_block"]?.["secret_content_input"]?.value
@@ -190,484 +433,173 @@ app.post(
       const contextLabel =
         values["context_label_block"]?.["context_label_input"]?.value?.trim() ||
         undefined;
-      const recipient =
-        values["recipient_block"]?.["recipient_select"]?.selected_user || null;
       const rawTtl =
         values["ttl_block"]?.["ttl_select"]?.selected_option?.value ?? "3600";
       const parsedTtl = parseInt(rawTtl, 10);
-      const ttlSeconds = isNaN(parsedTtl) || parsedTtl <= 0 ? 3600 : parsedTtl;
-
+      const ttlSeconds = Number.isNaN(parsedTtl) || parsedTtl <= 0
+        ? 3600
+        : parsedTtl;
       const rawViews =
         values["views_block"]?.["views_select"]?.selected_option?.value ?? "1";
       const parsedViews = parseInt(rawViews, 10);
-      const viewsLimit = isNaN(parsedViews) || parsedViews <= 0
+      const viewsLimit = Number.isNaN(parsedViews) || parsedViews <= 0
         ? 1
         : parsedViews;
 
-      // Validation
       if (!secretContent) {
-        return c.json(
-          slackModalErrors({
-            secret_content_block: "Secret content cannot be empty.",
-          }),
-        );
+        return c.json(slackModalErrors({
+          secret_content_block: "Secret content cannot be empty.",
+        }));
       }
       if (secretContent.length > 100000) {
-        return c.json(
-          slackModalErrors({
-            secret_content_block:
-              "Secret content exceeds the maximum limit (100KB).",
-          }),
-        );
+        return c.json(slackModalErrors({
+          secret_content_block:
+            "Secret content exceeds the maximum limit (100KB).",
+        }));
       }
 
-      // Metadata from modal
-      let channelId: string | null = null;
-      try {
-        if (view.private_metadata) {
-          const meta = JSON.parse(view.private_metadata);
-          channelId = meta.channelId ?? null;
-        }
-      } catch {
-        // Ignore malformed metadata
-      }
-
-      // Find or upsert workspace
       let workspace = await workspacesRepo.findBySlackTeamId(teamId);
       if (!workspace) {
         workspace = await workspacesRepo.upsert({
           slackTeamId: teamId,
-          teamName: payload.team?.domain ?? "Default Workspace",
+          teamName: payload.team?.domain ?? teamId,
         });
       }
 
-      // Track MAU
       mauRepo.recordUserInteraction({
         workspaceId: workspace.id,
         slackUserId: user.id,
         appSlug: "secret",
       }).catch((err) => console.error("MAU record failed on submission:", err));
 
-      // Cryptographic Split-Key Generation (Zero-Knowledge)
       const masterKey = await importMasterKey(getMasterKeyHex());
       const split = await createSplitSecret(secretContent, masterKey);
 
-      // If workspace has audit add-on, record creation
       let auditLogId: string | undefined;
       if (workspace.has_secret_audit_addon) {
         try {
-          const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
           auditLogId = await secretAuditRepo.recordCreated({
             workspaceId: workspace.id,
             secretEphemeralId: split.secretId,
             creatorSlackUserId: user.id,
-            targetChannelId: channelId,
-            allowedRecipientIds: recipient ? [recipient] : null,
+            targetChannelId: null,
+            allowedRecipientIds: null,
             publicContextLabel: contextLabel,
             maxViews: viewsLimit,
-            expiresAt,
+            expiresAt: new Date(Date.now() + ttlSeconds * 1000),
           });
         } catch (auditErr) {
           console.error(
-            "Failed to record audit log on secret creation:",
+            "Failed to record audit log on link creation:",
             auditErr,
           );
         }
       }
 
-      // Store encrypted secret in UNLOGGED kv_store
       const kvPayload: SecretKVPayload = {
         ciphertextBase64: split.ciphertextBase64,
         ivBase64: split.ivBase64,
         encryptedServerKeyBase64: split.encryptedServerKeyBase64,
         serverKeyIvBase64: split.serverKeyIvBase64,
         creatorSlackId: user.id,
-        allowedRecipients: recipient ? [recipient] : null,
+        allowedRecipients: null,
         remainingViews: viewsLimit,
         contextLabel,
-        channelId,
+        channelId: null,
         workspaceId: workspace.id,
         auditLogId,
       };
-
       await kv.set(
         split.secretId,
         kvPayload as unknown as Record<string, unknown>,
         ttlSeconds,
       );
 
-      // Build in-channel card
-      const cardPayload = buildSecretActiveCard({
-        creatorSlackId: user.id,
+      const linkUrl = secretLink(split.secretId, split.clientKeyHex);
+      const responseUrl = directMessageResponseUrl(view.private_metadata);
+      if (responseUrl) {
+        const message = buildSecretDirectMessage({
+          linkUrl,
+          ttlMinutes: Math.floor(ttlSeconds / 60),
+          remainingViews: viewsLimit,
+          contextLabel,
+        });
+        // Slack gives this request 3 seconds. Waiting for the message to post
+        // makes the modal show a connection error and stay open, so the next
+        // click creates another link.
+        fetch(responseUrl, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            response_type: "in_channel",
+            text: message.text,
+            blocks: message.blocks,
+          }),
+        }).catch((err) =>
+          console.error("Failed to send secret link in direct message:", err)
+        );
+        return c.json(slackModalClear());
+      }
+
+      return c.json(slackModalUpdate(buildSecretLinkReadyModal({
+        linkUrl,
         secretId: split.secretId,
-        clientKeyHex: split.clientKeyHex,
-        contextLabel,
-        allowedRecipientSlackId: recipient,
         ttlMinutes: Math.floor(ttlSeconds / 60),
         remainingViews: viewsLimit,
-      });
-
-      // If channel is known, enqueue outbox event to post the active card into the channel
-      if (channelId) {
-        await sqlWrite.begin(async (tx) => {
-          await enqueueOutboxEvent(tx, {
-            workspaceId: workspace!.id,
-            appSource: "secret",
-            eventType: "secret.post_active_card",
-            payload: {
-              channelId,
-              secretId: split.secretId,
-              messagePayload: cardPayload,
-            },
-          });
-        }).catch((err) =>
-          console.error("Failed to enqueue active card post:", err)
-        );
-      }
-
-      // Close the modal
-      return c.json(slackModalClear());
+        contextLabel,
+        postedInDirectMessage: false,
+      })));
     }
 
-    // 2. BLOCK ACTIONS: Reveal Secret or Revoke & Destroy
     if (type === "block_actions") {
-      const actions = payload.actions ?? [];
-      const action = actions[0];
+      const action = payload.actions?.[0];
       const user = payload.user;
-
       if (!action) return c.text("OK");
 
-      // REVEAL SECRET
       if (action.action_id === "secret_reveal_click") {
-        const rawValue = String(action.value ?? "");
-        const [secretId, clientKeyHex] = rawValue.split(":");
-
-        if (!secretId || !clientKeyHex) {
-          return c.text("Invalid action payload", 400);
-        }
-
-        // Atomically burn or decrement view WITH PRE-AUTHORIZATION VALIDATION!
-        // Prevents unauthorized users from consuming/burning someone else's secret.
-        const stored = await kv.consumeMultiViewSecret<SecretKVPayload>(
-          secretId,
-          undefined,
-          (payloadData) => {
-            if (
-              payloadData.allowedRecipients &&
-              payloadData.allowedRecipients.length > 0 &&
-              !payloadData.allowedRecipients.includes(user.id) &&
-              payloadData.creatorSlackId !== user.id
-            ) {
-              return false; // Unauthorized! Do NOT burn or decrement views!
-            }
-            return true;
-          },
-        );
-
-        const messageTs = payload.container?.message_ts ??
-          payload.message?.ts;
-        const channelId = payload.channel?.id ??
-          payload.container?.channel_id;
-
-        if (!stored) {
-          // Already burned, revoked, or expired!
-          const ephemeralText =
-            "🔒 *This secret has already been burned, revoked, or has expired.*";
-
-          // If bot token and channel are available, actively post ephemeral notice so Slack user receives immediate feedback
-          let botToken = Deno.env.get("SECRET_APP_BOT_TOKEN") ??
-            Deno.env.get("SLACK_BOT_TOKEN");
-          if (!botToken && payload.team?.id) {
-            try {
-              const install = await installationsRepo.findInstallation(
-                payload.team.id,
-                "secret",
-              );
-              if (install?.installation.bot_access_token_enc) {
-                const masterKey = await importMasterKey(getMasterKeyHex());
-                botToken = await decryptOAuthToken(
-                  install.installation.bot_access_token_enc,
-                  masterKey,
-                );
-              }
-            } catch (err) {
-              console.error("Failed to query bot token for expired secret notice:", err);
-            }
-          }
-
-          if (botToken && channelId) {
-            slackApi.postEphemeral(botToken, channelId, user.id, {
-              text: ephemeralText,
-              blocks: [
-                {
-                  type: "section",
-                  text: {
-                    type: "mrkdwn",
-                    text: ephemeralText,
-                  },
-                },
-              ],
-            }).catch((err) =>
-              console.error("Failed to send ephemeral notice on expired secret:", err)
-            );
-
-            // Also update the card in the channel to Expired & Purged state (State 3) if messageTs is known
-            if (messageTs) {
-              const expiredCard = buildSecretBurnedCard({
-                burnedAtIso: new Date().toISOString(),
-                wasExpired: true,
-              });
-              slackApi.updateMessage(botToken, channelId, messageTs, expiredCard)
-                .catch((err) =>
-                  console.error("Failed to update expired card in channel:", err)
-                );
-            }
-          }
-
-          return c.json({
-            response_type: "ephemeral",
-            text: ephemeralText,
-          });
-        }
-
-        if (stored.notAllowed) {
-          // Access denied without consuming secret
-          return c.json({
-            response_type: "ephemeral",
-            text:
-              "🚫 *Access Denied:* You are not the authorized recipient of this secret.",
-          });
-        }
-
-        const payloadData = stored.value;
-
-        // Track MAU for reader
-        if (payloadData.workspaceId) {
-          mauRepo.recordUserInteraction({
-            workspaceId: payloadData.workspaceId,
-            slackUserId: user.id,
-            appSlug: "secret",
-          }).catch((err) => console.error("MAU record failed on reveal:", err));
-        }
-
-        // Decrypt secret using Split-Key recombined in RAM
-        const masterKey = await importMasterKey(getMasterKeyHex());
-        let plaintext: string;
-        try {
-          plaintext = await revealSplitSecret(
-            {
-              ciphertextBase64: payloadData.ciphertextBase64,
-              ivBase64: payloadData.ivBase64,
-              encryptedServerKeyBase64: payloadData.encryptedServerKeyBase64,
-              serverKeyIvBase64: payloadData.serverKeyIvBase64,
-            },
-            clientKeyHex,
-            masterKey,
-          );
-        } catch (decryptErr) {
-          console.error("Decryption failed:", decryptErr);
-          return c.json({
-            response_type: "ephemeral",
-            text: "❌ *Failed to decrypt secret.* Integrity check failed.",
-          });
-        }
-
-        const destroyedAtIso = new Date().toISOString();
-
-        // If audit logging enabled, record viewed
-        if (payloadData.auditLogId || payloadData.workspaceId) {
-          secretAuditRepo.recordBurned({
-            secretEphemeralId: secretId,
-            viewerSlackUserId: user.id,
-            status: "viewed",
-          }).catch((err) =>
-            console.error("Failed to record audit log on reveal:", err)
-          );
-        }
-
-        // Determine messageTs and channelId from interaction container/message or payloadData
-        const resolvedMessageTs = messageTs ?? payloadData.messageTs;
-        const resolvedChannelId = channelId ?? payloadData.channelId;
-
-        // If completely burned (last view), trigger card update to State 3
-        if (stored.burned) {
-          const burnedCard = buildSecretBurnedCard({
-            contextLabel: payloadData.contextLabel,
-            viewerSlackId: user.id,
-            burnedAtIso: destroyedAtIso,
-            wasRevoked: false,
-          });
-
-          if (resolvedChannelId && resolvedMessageTs && payloadData.workspaceId) {
-            await sqlWrite.begin(async (tx) => {
-              await enqueueOutboxEvent(tx, {
-                workspaceId: payloadData.workspaceId,
-                appSource: "secret",
-                eventType: "secret.burned_card_update",
-                payload: {
-                  channelId: resolvedChannelId,
-                  messageTs: resolvedMessageTs,
-                  cardPayload: burnedCard,
-                },
-              });
-            }).catch((err) =>
-              console.error("Failed to enqueue burned card update:", err)
-            );
-          }
-        }
-
-        // Build decrypted modal view for the reader
-        const revealedModal = buildSecretRevealedModal({
-          plaintext,
-          creatorSlackId: payloadData.creatorSlackId,
-          destroyedAtIso,
-          remainingViews: stored.remainingViews,
+        return c.json({
+          response_type: "ephemeral",
+          replace_original: false,
+          text:
+            "Open the one-time link in your browser. Secret does not reveal secrets inside Slack, and this message does not contain the secret.",
         });
-
-        // Resolve Bot Token
-        let botToken = Deno.env.get("SECRET_APP_BOT_TOKEN") ??
-          Deno.env.get("SLACK_BOT_TOKEN");
-        if (!botToken && payloadData.workspaceId) {
-          try {
-            const install = await installationsRepo.findByWorkspaceId(
-              payloadData.workspaceId,
-              "secret",
-            );
-            if (install?.installation.bot_access_token_enc) {
-              botToken = await decryptOAuthToken(
-                install.installation.bot_access_token_enc,
-                masterKey,
-              );
-            }
-          } catch (err) {
-            console.error("Failed to resolve bot token for reveal modal:", err);
-          }
-        }
-
-        let modalOpened = false;
-        // 1. If trigger_id is present, attempt to open the modal
-        if (payload.trigger_id && botToken) {
-          try {
-            const res = await slackApi.openView(
-              botToken,
-              payload.trigger_id,
-              revealedModal,
-            );
-            if (res.ok) {
-              modalOpened = true;
-            } else {
-              console.error("Slack views.open failed on reveal:", res.error);
-            }
-          } catch (err) {
-            console.error("Failed to call views.open on reveal:", err);
-          }
-        }
-
-        // 2. Fallback: If modal could not be opened (e.g. trigger_id expired or missing),
-        // send the secret as an ephemeral message directly to the viewer in the channel so they NEVER lose the secret!
-        if (!modalOpened) {
-          const ephemeralPayload = buildSecretRevealedEphemeral({
-            plaintext,
-            creatorSlackId: payloadData.creatorSlackId,
-            destroyedAtIso,
-            remainingViews: stored.remainingViews,
-          });
-
-          if (botToken && channelId) {
-            try {
-              await slackApi.postEphemeral(
-                botToken,
-                channelId,
-                user.id,
-                ephemeralPayload,
-              );
-              return c.body(null, 200);
-            } catch (err) {
-              console.error("Failed to send ephemeral fallback on reveal:", err);
-            }
-          }
-
-          // Return fallback response
-          return c.json({
-            response_action: "open",
-            view: revealedModal,
-            ...ephemeralPayload,
-          });
-        }
-
-        return c.body(null, 200);
       }
 
-      // REVOKE & DESTROY
       if (action.action_id === "secret_revoke_click") {
         const secretId = String(action.value ?? "");
-        if (!secretId) {
-          return c.text("Invalid secret ID", 400);
-        }
+        if (!secretId) return c.text("Invalid secret ID", 400);
 
-        // Fetch secret to verify creator authorization
         const stored = await kv.get<SecretKVPayload>(secretId);
         if (!stored) {
           return c.json({
             response_type: "ephemeral",
-            text: "🔒 *This secret has already been destroyed or has expired.*",
+            text: "This one-time link was already destroyed or it expired.",
           });
         }
-
-        // SECURITY CHECK: Only creator can revoke!
         if (stored.creatorSlackId !== user.id) {
           return c.json({
             response_type: "ephemeral",
             text:
-              `🚫 *Access Denied:* Only the creator (<@${stored.creatorSlackId}>) can revoke this secret.`,
+              `Only the creator (<@${stored.creatorSlackId}>) can destroy this link.`,
           });
         }
 
-        // Atomically delete from kv_store
         await kv.delete(secretId);
-
-        const burnedAtIso = new Date().toISOString();
-
-        // Audit log
+        await rememberLinkOutcome(secretId, "revoked");
         if (stored.auditLogId || stored.workspaceId) {
           secretAuditRepo.recordBurned({
             secretEphemeralId: secretId,
             viewerSlackUserId: user.id,
             status: "revoked",
           }).catch((err) =>
-            console.error("Failed to record audit log on revoke:", err)
+            console.error("Failed to record link revoke:", err)
           );
         }
-
-        const burnedCard = buildSecretBurnedCard({
-          contextLabel: stored.contextLabel,
-          burnedAtIso,
-          wasRevoked: true,
+        return c.json({
+          response_type: "ephemeral",
+          text:
+            "This one-time link has been destroyed. It can no longer be opened.",
         });
-
-        // Enqueue outbox update for the in-channel card
-        const messageTs = payload.container?.message_ts ??
-          payload.message?.ts ?? stored.messageTs;
-        const channelId = payload.channel?.id ??
-          payload.container?.channel_id ?? stored.channelId;
-        if (channelId && messageTs && stored.workspaceId) {
-          await sqlWrite.begin(async (tx) => {
-            await enqueueOutboxEvent(tx, {
-              workspaceId: stored.workspaceId,
-              appSource: "secret",
-              eventType: "secret.burned_card_update",
-              payload: {
-                channelId,
-                messageTs,
-                cardPayload: burnedCard,
-              },
-            });
-          }).catch((err) =>
-            console.error("Failed to enqueue revoke card update:", err)
-          );
-        }
-
-        return c.json(burnedCard);
       }
     }
 
@@ -675,9 +607,33 @@ app.post(
   },
 );
 
+app.post(
+  "/slack/events",
+  slackSignatureMiddleware(getSigningSecret),
+  async (c) => {
+    const payload = await c.req.json();
+    if (payload.type === "url_verification") {
+      return c.json({ challenge: payload.challenge });
+    }
+    if (payload.type === "event_callback") {
+      const eventType = payload.event?.type;
+      const teamId = String(payload.team_id ?? "");
+      if (
+        teamId &&
+        (eventType === "app_uninstalled" || eventType === "tokens_revoked")
+      ) {
+        await revokeInstallation(teamId);
+      }
+    }
+    return c.body(null, 200);
+  },
+);
+
 export default app;
 
 if (import.meta.main) {
+  getSigningSecret();
+  getMasterKeyHex();
   const port = parseInt(Deno.env.get("PORT") ?? "8080", 10);
   console.log(`Starting Secret App on port ${port}...`);
   Deno.serve({ port }, app.fetch);

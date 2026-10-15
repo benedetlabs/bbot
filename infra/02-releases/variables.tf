@@ -21,36 +21,34 @@ variable "auto_build_images" {
 
 # ============================================================================
 # CONFIGURAÇÃO INDIVIDUAL POR PROJETO (secret-app, queue-app, todo-app)
-# Permite fazer deploy de apenas 1 projeto (enabled = true/false) e versionar tags separadas!
+# A tag da imagem é o hash do código que aquele app executa (locals.image_tags).
 # ============================================================================
 variable "projects" {
   description = "Mapa de configuração independente por app do monorepo"
   type = map(object({
     enabled        = bool
-    image_tag      = string
     replicas       = optional(number, 2)
     signing_secret = optional(string, "")
     bot_token      = optional(string, "")
+    client_id      = optional(string, "")
+    client_secret  = optional(string, "")
   }))
 
   default = {
     "secret-app" = {
       enabled        = true
-      image_tag      = "v1.0.0"
       replicas       = 2
       signing_secret = ""
       bot_token      = ""
     }
     "queue-app" = {
       enabled        = false
-      image_tag      = "v1.0.0"
       replicas       = 2
       signing_secret = ""
       bot_token      = ""
     }
     "todo-app" = {
       enabled        = false
-      image_tag      = "v1.0.0"
       replicas       = 2
       signing_secret = ""
       bot_token      = ""
@@ -61,14 +59,12 @@ variable "projects" {
 variable "worker" {
   description = "Configuração independente do Transactional Outbox Worker"
   type = object({
-    enabled   = bool
-    image_tag = string
-    replicas  = optional(number, 2)
+    enabled  = bool
+    replicas = optional(number, 2)
   })
 
   default = {
-    enabled   = true
-    image_tag = "v1.0.0"
-    replicas  = 2
+    enabled  = true
+    replicas = 2
   }
 }

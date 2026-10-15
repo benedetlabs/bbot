@@ -1,5 +1,11 @@
 import { assertEquals } from "@std/assert";
 import { app, extractSlackUserId, getSigningSecret } from "./main.ts";
+
+Deno.env.set(
+  "MASTER_ENCRYPTION_KEY_HEX",
+  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+);
+Deno.env.set("QUEUE_APP_SIGNING_SECRET", "test_queue_signing_secret");
 import {
   type JoinQueueResult,
   mauRepo,

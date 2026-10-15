@@ -66,7 +66,9 @@ export function createKVStore(getSql: () => Sql) {
       const sql = customSql ?? getSql();
       const result = await sql`
         UPDATE kv_store
-        SET value = ${sql.json(value as unknown as Parameters<typeof sql.json>[0])},
+        SET value = ${
+        sql.json(value as unknown as Parameters<typeof sql.json>[0])
+      },
             updated_at = NOW()
         WHERE key = ${key} AND expires_at > NOW()
       `;
@@ -83,6 +85,28 @@ export function createKVStore(getSql: () => Sql) {
         WHERE key = ${key} AND expires_at > NOW()
       `;
       return rows.length > 0 ? rows[0].value : null;
+    },
+
+    /**
+     * Reads a key even after its TTL. Active rows can still be opened.
+     * Expired rows stay in the table, so a visit can say the link expired
+     * instead of pretending it never existed.
+     */
+    async lookup<T>(
+      key: string,
+      customSql?: Sql,
+    ): Promise<{ status: "active" | "expired"; value: T } | null> {
+      const sql = customSql ?? getSql();
+      const rows = await sql<{ value: T; active: boolean }[]>`
+        SELECT value, (expires_at > NOW()) AS active
+        FROM kv_store
+        WHERE key = ${key}
+      `;
+      if (rows.length === 0) return null;
+      return {
+        status: rows[0].active ? "active" : "expired",
+        value: rows[0].value,
+      };
     },
 
     /**
@@ -182,6 +206,22 @@ export function createKVStore(getSql: () => Sql) {
         WHERE key = ${key}
       `;
       return (result.count ?? 0) > 0;
+    },
+
+    /**
+     * Deletes unopened secret payloads for a workspace. Used when the Slack
+     * app is uninstalled or its token is revoked.
+     */
+    async deleteByWorkspaceId(
+      workspaceId: string,
+      customSql?: Sql,
+    ): Promise<number> {
+      const sql = customSql ?? getSql();
+      const result = await sql`
+        DELETE FROM kv_store
+        WHERE value->>'workspaceId' = ${workspaceId}
+      `;
+      return result.count ?? 0;
     },
   };
 }

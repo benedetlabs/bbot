@@ -16,7 +16,7 @@ features:
   slash_commands:
     - command: "/secret"
       url: "https://secret.bsuit.app/slack/commands"
-      description: "Share an ephemeral encrypted secret"
+      description: "Create a one-time secret link"
       usage_hint: "[optional text or empty for modal]"
       should_escape: false
     - command: "/queue"

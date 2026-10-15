@@ -1,7 +1,9 @@
 /**
  * @module @suite/crypto
- * High-performance, zero-knowledge Split-Key cryptographic engine
- * utilizing native Web Crypto (AES-256-GCM) with zero external npm dependencies.
+ * AES-256-GCM helpers. Secret links use a split key: the server stores one
+ * half encrypted with the master key, and the other half lives only in the
+ * URL fragment. The server can decrypt when the link is opened. This is not
+ * zero-knowledge encryption.
  */
 
 // Byte conversion helpers
@@ -48,6 +50,22 @@ export function base64ToBytes(base64: string): Uint8Array {
 /**
  * Imports or derives an AES-256-GCM Master CryptoKey from a 64-character hex string or 32-byte Uint8Array.
  */
+/**
+ * Reads MASTER_ENCRYPTION_KEY_HEX. There is no development fallback:
+ * a missing or short value throws so a deploy cannot encrypt with a public key.
+ */
+export function requireMasterKeyHex(
+  value = Deno.env.get("MASTER_ENCRYPTION_KEY_HEX"),
+): string {
+  const trimmed = value?.trim() ?? "";
+  if (!/^[0-9a-fA-F]{64}$/.test(trimmed)) {
+    throw new Error(
+      "MASTER_ENCRYPTION_KEY_HEX is required and must be 64 hex characters",
+    );
+  }
+  return trimmed;
+}
+
 export async function importMasterKey(
   rawKey: string | Uint8Array,
 ): Promise<CryptoKey> {

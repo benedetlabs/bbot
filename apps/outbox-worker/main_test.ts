@@ -1,5 +1,10 @@
 import { assertEquals, assertRejects } from "@std/assert";
 import { processOutboxEvent, runWorkerIteration } from "./main.ts";
+
+Deno.env.set(
+  "MASTER_ENCRYPTION_KEY_HEX",
+  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+);
 import type { OutboxEventRecord } from "@suite/outbox";
 import { slackApi } from "@suite/slack-kit";
 import { kv, queuesRepo, setCustomSql } from "@suite/db";

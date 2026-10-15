@@ -24,7 +24,11 @@ import {
   slackApi,
   type SlackMessagePayload,
 } from "@suite/slack-kit";
-import { decryptOAuthToken, importMasterKey } from "@suite/crypto";
+import {
+  decryptOAuthToken,
+  importMasterKey,
+  requireMasterKeyHex,
+} from "@suite/crypto";
 import { syncStickyQueueCard } from "../queue-app/main.ts";
 
 const WORKER_ID = `worker-${crypto.randomUUID().slice(0, 8)}`;
@@ -40,8 +44,7 @@ const BATCH_SIZE = parseInt(
 let isRunning = true;
 
 export function getMasterKeyHex(): string {
-  return Deno.env.get("MASTER_ENCRYPTION_KEY_HEX") ??
-    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+  return requireMasterKeyHex();
 }
 
 async function resolveBotToken(
@@ -201,7 +204,11 @@ export async function processOutboxEvent(
           });
 
           // Direct DM alert with interactive action buttons to notify top-of-queue
-          const res = await slackApi.postMessage(botToken, newHolderUserId, promoMsg);
+          const res = await slackApi.postMessage(
+            botToken,
+            newHolderUserId,
+            promoMsg,
+          );
           if (!res.ok) {
             console.warn(
               `[${WORKER_ID}] Failed to send promotion DM to ${newHolderUserId}:`,
@@ -493,6 +500,7 @@ export function stopWorker(): void {
 }
 
 if (import.meta.main) {
+  getMasterKeyHex();
   const signals: Deno.Signal[] = ["SIGINT", "SIGTERM"];
   for (const sig of signals) {
     try {

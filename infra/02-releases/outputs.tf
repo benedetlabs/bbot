@@ -11,11 +11,15 @@ output "helm_release_info" {
     deployed_projects = {
       for k, v in var.projects : k => {
         enabled   = v.enabled
-        image_tag = v.image_tag
+        image_tag = local.image_tags[k]
         replicas  = v.replicas
       }
     }
-    worker = var.worker
+    worker = {
+      enabled   = var.worker.enabled
+      image_tag = local.image_tags["outbox-worker"]
+      replicas  = var.worker.replicas
+    }
   }
 }
 

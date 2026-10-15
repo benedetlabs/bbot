@@ -3,25 +3,24 @@ github_username         = "benedetlabs"
 github_token            = "ghp_SEU_GITHUB_TOKEN_WRITE_E_READ_PACKAGES"
 auto_build_images       = true
 
-# Você pode ativar apenas 1 projeto (enabled = true) ou todos, e cada um tem sua própria image_tag!
+# A tag da imagem é o hash do código de cada app. Não defina image_tag aqui.
 projects = {
   "secret-app" = {
     enabled        = true
-    image_tag      = "v1.0.1"
     replicas       = 2
     signing_secret = "SEU_SLACK_SECRET_SIGNING"
     bot_token      = "xoxb-SEU_SLACK_SECRET_BOT_TOKEN"
+    client_id      = "SEU_SLACK_CLIENT_ID"
+    client_secret  = "SEU_SLACK_CLIENT_SECRET"
   }
   "queue-app" = {
     enabled        = false # Desativado: não faz build nem cria pods no cluster até você mudar para true!
-    image_tag      = "v1.0.0"
     replicas       = 2
     signing_secret = ""
     bot_token      = ""
   }
   "todo-app" = {
     enabled        = false # Desativado: não faz build nem cria pods no cluster até você mudar para true!
-    image_tag      = "v1.0.0"
     replicas       = 2
     signing_secret = ""
     bot_token      = ""
@@ -29,7 +28,6 @@ projects = {
 }
 
 worker = {
-  enabled   = true
-  image_tag = "v1.0.0"
-  replicas  = 2
+  enabled  = true
+  replicas = 2
 }

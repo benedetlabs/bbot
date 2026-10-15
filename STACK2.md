@@ -131,7 +131,7 @@ PORT: "8080" DATABASE_ORIGIN_URL:
 PGCACHE_URL:
 "postgres://suite_user:suite_local_password@pgcache:5433/slack_suite"
 SLACK_SIGNING_SECRET: "${SLACK_SIGNING_SECRET:-dev_signing_secret}"
-      MASTER_ENCRYPTION_KEY_HEX: "${MASTER_ENCRYPTION_KEY_HEX:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}"
+      MASTER_ENCRYPTION_KEY_HEX: "${MASTER_ENCRYPTION_KEY_HEX:?Set MASTER_ENCRYPTION_KEY_HEX}"
 ports: - "8081:8080"
 
 queue-app: build: context: . dockerfile: Dockerfile args: APP_NAME: queue-app

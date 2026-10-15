@@ -18,7 +18,11 @@ secrets:
   postgresUser: "suite_user"
   postgresPassword: "CHANGE_ME_STRONG_PASSWORD"
   postgresDb: "slack_suite"
-  masterEncryptionKeyHex: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  # Required at deploy time. Generate with: openssl rand -hex 32
+  masterEncryptionKeyHex: ""
+  secretAppClientId: ""
+  secretAppClientSecret: ""
+  secretPublicBaseUrl: "https://secret.bsuit.app"
   secretAppSigningSecret: ""
   queueAppSigningSecret: ""
   todoAppSigningSecret: ""
@@ -77,7 +81,7 @@ pgcache:
 
 # ============================================================================
 # POOL 3: APLICAÇÕES DENO POR PROJETO + WORKER + TUNNEL (app-pool)
-# Cada app tem seu próprio `enabled`, `imageTag` e `replicas` independentes!
+# Cada app tem seu próprio `enabled`, `replicas` e `imageTag`. O Terraform preenche a tag com o hash do código daquele app.
 # ============================================================================
 apps:
   nodeSelector:
