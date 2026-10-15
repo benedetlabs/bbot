@@ -1,0 +1,42 @@
+name: Deploy Production (Protected by Gatekeep)
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target deployment environment"
+        required: true
+        default: "production"
+
+jobs:
+  deploy:
+    name: Production Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Human Approval via Slack Gatekeep
+        id: gatekeep
+        uses: ./actions/gatekeep
+        with:
+          api_key: ${{ secrets.GATEKEEP_API_KEY }}
+          action: "deploy.k3s.production"
+          target: "civo:cluster-slack-suite"
+          params: |
+            {
+              "environment": "${{ inputs.environment }}",
+              "commit": "${{ github.sha }}",
+              "ref": "${{ github.ref }}",
+              "actor": "${{ github.actor }}"
+            }
+          justification: "Production release initiated by ${{ github.actor }}"
+          server_url: "https://gatekeep.bsuit.app"
+          timeout_minutes: 15
+
+      - name: Execute Deployment
+        run: |
+          echo "🚀 Deployment authorized by Slack user: ${{ steps.gatekeep.outputs.decided_by }}"
+          echo "🔐 Verified parameter hash: ${{ steps.gatekeep.outputs.params_hash }}"
+          echo "🎫 Single-use token: ${{ steps.gatekeep.outputs.approval_token }}"
+          # Production deployment steps (e.g. terraform apply / kubectl apply)

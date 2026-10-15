@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  test:
+    name: Deno Test Suite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Run Test Suite
+        env:
+          MASTER_ENCRYPTION_KEY_HEX: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          SLACK_SIGNING_SECRET: test_signing_secret_for_ci_pipeline
+        run: deno test -A

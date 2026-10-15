@@ -1,0 +1,78 @@
+name: "Gatekeep Slack Approval Gate"
+description: "Pause GitHub Actions workflow until an authorized human approves the action in Slack with cryptographic parameter binding."
+author: "Benedet Labs"
+branding:
+  icon: "shield"
+  color: "blue"
+
+inputs:
+  api_key:
+    description: "Gatekeep Agent API key (gk_live_...)"
+    required: true
+  action:
+    description: "Action name to approve (e.g. deploy.production, terraform.apply)"
+    required: true
+  target:
+    description: "Target resource or environment (e.g. k8s:civo-cluster, aws:production)"
+    required: false
+    default: ""
+  params:
+    description: "JSON string of execution parameters"
+    required: false
+    default: "{}"
+  justification:
+    description: "Context or reason for the approval request"
+    required: false
+    default: ""
+  on_behalf_of:
+    description: "Slack user ID of the initiator (optional)"
+    required: false
+    default: ""
+  server_url:
+    description: "Gatekeep server URL"
+    required: false
+    default: "https://gatekeep.bsuit.app"
+  timeout_minutes:
+    description: "Maximum minutes to wait for Slack approval before failing"
+    required: false
+    default: "15"
+
+outputs:
+  status:
+    description: "Approval status ('approved' or 'edited')"
+    value: ${{ steps.gatekeep.outputs.status }}
+  approval_token:
+    description: "Single-use approval token to present to /consume"
+    value: ${{ steps.gatekeep.outputs.approval_token }}
+  params_hash:
+    description: "Canonical RFC 8785 hash of the approved parameters"
+    value: ${{ steps.gatekeep.outputs.params_hash }}
+  decided_by:
+    description: "Slack user ID who approved the request"
+    value: ${{ steps.gatekeep.outputs.decided_by }}
+  request_id:
+    description: "Public ID of the Gatekeep request"
+    value: ${{ steps.gatekeep.outputs.request_id }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Setup Deno
+      uses: denoland/setup-deno@v2
+      with:
+        deno-version: v2.x
+
+    - name: Run Gatekeep Approval Gate
+      id: gatekeep
+      shell: bash
+      env:
+        GATEKEEP_API_KEY: ${{ inputs.api_key }}
+        GATEKEEP_ACTION: ${{ inputs.action }}
+        GATEKEEP_TARGET: ${{ inputs.target }}
+        GATEKEEP_PARAMS: ${{ inputs.params }}
+        GATEKEEP_JUSTIFICATION: ${{ inputs.justification }}
+        GATEKEEP_ON_BEHALF_OF: ${{ inputs.on_behalf_of }}
+        GATEKEEP_SERVER_URL: ${{ inputs.server_url }}
+        GATEKEEP_TIMEOUT_MINUTES: ${{ inputs.timeout_minutes }}
+      run: |
+        deno run -A ${{ github.action_path }}/main.ts
