@@ -7,7 +7,15 @@ Deno.env.set("GATEKEEP_APP_SIGNING_SECRET", "test_gatekeep_signing_secret");
 Deno.env.set("GATEKEEP_PUBLIC_BASE_URL", "https://gatekeep.bsuit.app");
 
 import { app, getSigningSecret } from "./main.ts";
-import { gatekeepRepo, setCustomSql, type GatekeepAgentRow, type GatekeepFullRequest } from "@suite/db";
+import {
+  gatekeepRepo,
+  installationsRepo,
+  kv,
+  setCustomSql,
+  workspacesRepo,
+  type GatekeepAgentRow,
+  type GatekeepFullRequest,
+} from "@suite/db";
 import type { Sql } from "postgres";
 
 // Setup mock SQL to avoid real DB connections in tests
@@ -438,4 +446,139 @@ Deno.test("gatekeep-app: POST /mcp handles remote MCP protocol messages", async 
   const data = await res.json();
   assertEquals(data.id, "mcp-test-1");
   assertEquals(data.result.serverInfo.name, "gatekeep-mcp");
+});
+
+Deno.test("gatekeep-app: Public HTML pages render correctly", async () => {
+  const rootRes = await app.request("/");
+  assertEquals(rootRes.status, 200);
+  const rootText = await rootRes.text();
+  assertEquals(rootText.includes("Gatekeep"), true);
+  assertEquals(rootText.includes("Add to Slack"), true);
+
+  const privRes = await app.request("/privacy");
+  assertEquals(privRes.status, 200);
+  const privText = await privRes.text();
+  assertEquals(privText.includes("Privacy Policy"), true);
+  assertEquals(privText.includes("benedetlabs@gmail.com"), true);
+
+  const supRes = await app.request("/support");
+  assertEquals(supRes.status, 200);
+  const supText = await supRes.text();
+  assertEquals(supText.includes("Support"), true);
+});
+
+Deno.test("gatekeep-app: GET /slack/install redirects to Slack OAuth authorize with state", async () => {
+  Deno.env.set("GATEKEEP_APP_CLIENT_ID", "test_gk_client_123");
+  const res = await app.request("/slack/install");
+  assertEquals(res.status, 302);
+  const location = res.headers.get("location") ?? "";
+  assertEquals(location.startsWith("https://slack.com/oauth/v2/authorize?"), true);
+  assertEquals(location.includes("client_id=test_gk_client_123"), true);
+  assertEquals(location.includes("scope=commands%2Cchat%3Awrite%2Cchat%3Awrite.public%2Cim%3Awrite"), true);
+  assertEquals(location.includes("state="), true);
+});
+
+Deno.test("gatekeep-app: GET /slack/oauth/callback rejects missing or expired state", async () => {
+  const res = await app.request("/slack/oauth/callback?code=abc&state=missing");
+  assertEquals(res.status, 400);
+  const text = await res.text();
+  assertEquals(text.includes("expired"), true);
+});
+
+Deno.test("gatekeep-app: GET /slack/oauth/callback validates state and exchanges token", async () => {
+  Deno.env.set("GATEKEEP_APP_CLIENT_ID", "test_gk_client_123");
+  Deno.env.set("GATEKEEP_APP_CLIENT_SECRET", "test_gk_client_secret_456");
+
+  const kvStore = new Map<string, unknown>();
+  const origKvGet = kv.get;
+  const origKvSet = kv.set;
+  const origKvDelete = kv.delete;
+  kv.get = ((key: string) => Promise.resolve(kvStore.get(key) ?? null)) as typeof kv.get;
+  kv.set = ((key: string, val: unknown) => { kvStore.set(key, val); return Promise.resolve(); }) as typeof kv.set;
+  kv.delete = ((key: string) => { kvStore.delete(key); return Promise.resolve(true); }) as typeof kv.delete;
+
+  const state = "test_oauth_state_xyz";
+  await kv.set(`oauth_state:${state}`, { purpose: "gatekeep_install" }, 600);
+
+  // Mock global fetch for slack api token exchange
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = ((url: string | URL | Request, init?: RequestInit) => {
+    const urlStr = typeof url === "string" ? url : url instanceof URL ? url.toString() : url.url;
+    if (urlStr.includes("oauth.v2.access")) {
+      return Promise.resolve(new Response(JSON.stringify({
+        ok: true,
+        access_token: "xoxb-test-bot-token-12345",
+        team: { id: "T_TEST_TEAM", name: "Acme Corp" },
+        bot_user_id: "U_GATEKEEP_BOT",
+        authed_user: { id: "U_INSTALLER" },
+        scope: "commands,chat:write,chat:write.public,im:write",
+      }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    }
+    return originalFetch(url, init);
+  }) as typeof fetch;
+
+  try {
+    const res = await app.request(`/slack/oauth/callback?code=test_code_123&state=${state}`);
+    assertEquals(res.status, 200);
+    const text = await res.text();
+    assertEquals(text.includes("Acme Corp"), true);
+    assertEquals(text.includes("Gatekeep is installed!"), true);
+
+    // State should be deleted from kv
+    const consumed = await kv.get(`oauth_state:${state}`);
+    assertEquals(consumed, null);
+  } finally {
+    globalThis.fetch = originalFetch;
+    kv.get = origKvGet;
+    kv.set = origKvSet;
+    kv.delete = origKvDelete;
+  }
+});
+
+Deno.test("gatekeep-app: POST /slack/events handles app_uninstalled and tokens_revoked", async () => {
+  let deletedSlug = "";
+  let deletedTeam = "";
+  installationsRepo.deleteBySlackTeam = ((teamId: string, slug: string) => {
+    deletedTeam = teamId;
+    deletedSlug = slug;
+    return Promise.resolve(1);
+  }) as typeof installationsRepo.deleteBySlackTeam;
+
+  // 1. app_uninstalled
+  const uninstalledPayload = {
+    type: "event_callback",
+    team_id: "T_UNINSTALL_TEAM",
+    event: { type: "app_uninstalled" },
+  };
+  const body1 = JSON.stringify(uninstalledPayload);
+  const headers1 = await createSignedHeaders(body1, getSigningSecret(), "application/json");
+  const res1 = await app.request("/slack/events", {
+    method: "POST",
+    headers: headers1,
+    body: body1,
+  });
+  assertEquals(res1.status, 200);
+  assertEquals(deletedTeam, "T_UNINSTALL_TEAM");
+  assertEquals(deletedSlug, "gatekeep");
+
+  // Reset
+  deletedTeam = "";
+  deletedSlug = "";
+
+  // 2. tokens_revoked
+  const revokedPayload = {
+    type: "event_callback",
+    team_id: "T_REVOKED_TEAM",
+    event: { type: "tokens_revoked" },
+  };
+  const body2 = JSON.stringify(revokedPayload);
+  const headers2 = await createSignedHeaders(body2, getSigningSecret(), "application/json");
+  const res2 = await app.request("/slack/events", {
+    method: "POST",
+    headers: headers2,
+    body: body2,
+  });
+  assertEquals(res2.status, 200);
+  assertEquals(deletedTeam, "T_REVOKED_TEAM");
+  assertEquals(deletedSlug, "gatekeep");
 });

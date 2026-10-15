@@ -26,6 +26,7 @@ import {
   gatekeepRepo,
   getSqlWrite,
   installationsRepo,
+  kv,
   workspacesRepo,
 } from "@suite/db";
 import { cancelOutboxEvents, enqueueOutboxEvent } from "@suite/outbox";
@@ -44,8 +45,17 @@ import {
   timingSafeEqualString,
 } from "@suite/slack-kit";
 import { GatekeepMcpHandler, type McpJsonRpcRequest } from "@suite/gatekeep-mcp";
+import {
+  installedPage,
+  landingPage,
+  oauthErrorPage,
+  privacyPage,
+  supportPage,
+} from "./pages.ts";
 
 export const app = new Hono();
+
+export const BOT_SCOPES = "commands,chat:write,chat:write.public,im:write";
 
 export function getSigningSecret(): string {
   return requireNonEmptyEnv("GATEKEEP_APP_SIGNING_SECRET", [
@@ -55,6 +65,24 @@ export function getSigningSecret(): string {
 
 export function getMasterKeyHex(): string {
   return requireMasterKeyHex();
+}
+
+export function publicBaseUrl(): string {
+  const raw = Deno.env.get("GATEKEEP_PUBLIC_BASE_URL")?.trim() ||
+    "https://gatekeep.bsuit.app";
+  return raw.replace(/\/$/, "");
+}
+
+function html(body: string, status = 200) {
+  return new Response(body, {
+    status,
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "referrer-policy": "no-referrer",
+      "x-robots-tag": "noindex",
+      "cache-control": "no-store",
+    },
+  });
 }
 
 /**
@@ -99,7 +127,7 @@ async function authenticateAgent(authHeader: string | undefined) {
 }
 
 // ============================================================================
-// 1. HEALTHCHECK
+// 1. HEALTHCHECK & PUBLIC PAGES
 // ============================================================================
 app.get("/healthz", (c) => {
   return c.json({
@@ -107,6 +135,96 @@ app.get("/healthz", (c) => {
     app: "gatekeep",
     timestamp: new Date().toISOString(),
   });
+});
+
+app.get("/", () => html(landingPage()));
+app.get("/privacy", () => html(privacyPage()));
+app.get("/support", () => html(supportPage()));
+
+app.get("/slack/install", async (c) => {
+  const clientId = Deno.env.get("GATEKEEP_APP_CLIENT_ID")?.trim() ?? "";
+  if (!clientId) {
+    return html(oauthErrorPage("OAuth client id is not configured."), 503);
+  }
+  const state = bytesToHex(generateRandomBytes(16));
+  await kv.set(`oauth_state:${state}`, { purpose: "gatekeep_install" }, 600);
+  const redirectUri = `${publicBaseUrl()}/slack/oauth/callback`;
+  const url = new URL("https://slack.com/oauth/v2/authorize");
+  url.searchParams.set("client_id", clientId);
+  url.searchParams.set("scope", BOT_SCOPES);
+  url.searchParams.set("redirect_uri", redirectUri);
+  url.searchParams.set("state", state);
+  return c.redirect(url.toString());
+});
+
+app.get("/slack/oauth/callback", async (c) => {
+  if (c.req.query("error")) {
+    return html(oauthErrorPage("Slack did not authorize the install."), 400);
+  }
+  const code = c.req.query("code") ?? "";
+  const state = c.req.query("state") ?? "";
+  if (!code || !state) {
+    return html(oauthErrorPage("Missing OAuth code or state."), 400);
+  }
+
+  const stateKey = `oauth_state:${state}`;
+  const saved = await kv.get<{ purpose?: string }>(stateKey);
+  await kv.delete(stateKey);
+  if (!saved || saved.purpose !== "gatekeep_install") {
+    return html(
+      oauthErrorPage(
+        "This install link expired. Start again from Add to Slack.",
+      ),
+      400,
+    );
+  }
+
+  const clientId = Deno.env.get("GATEKEEP_APP_CLIENT_ID")?.trim() ?? "";
+  const clientSecret = Deno.env.get("GATEKEEP_APP_CLIENT_SECRET")?.trim() ?? "";
+  if (!clientId || !clientSecret) {
+    return html(oauthErrorPage("OAuth client is not configured."), 503);
+  }
+
+  const redirectUri = `${publicBaseUrl()}/slack/oauth/callback`;
+  const tokenResponse = await fetch("https://slack.com/api/oauth.v2.access", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      code,
+      redirect_uri: redirectUri,
+    }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  const data = await tokenResponse.json();
+  if (!data.ok || !data.access_token || !data.team?.id || !data.bot_user_id) {
+    return html(oauthErrorPage("Slack rejected the authorization code."), 400);
+  }
+
+  const masterKey = await importMasterKey(getMasterKeyHex());
+  const tokenEnc = await encryptOAuthToken(
+    String(data.access_token),
+    masterKey,
+  );
+  const workspace = await workspacesRepo.upsert({
+    slackTeamId: String(data.team.id),
+    teamName: String(data.team.name ?? data.team.id),
+    slackEnterpriseId: data.enterprise?.id ? String(data.enterprise.id) : null,
+  });
+  const scopes = String(data.scope ?? "")
+    .split(",")
+    .map((scope: string) => scope.trim())
+    .filter(Boolean);
+  await installationsRepo.upsert({
+    workspaceId: workspace.id,
+    appSlug: "gatekeep",
+    botUserId: String(data.bot_user_id),
+    botAccessTokenEnc: tokenEnc,
+    installedByUserId: String(data.authed_user?.id ?? data.bot_user_id),
+    scopes,
+  });
+  return html(installedPage(String(data.team.name ?? data.team.id)));
 });
 
 // ============================================================================
@@ -932,6 +1050,18 @@ app.post(
           });
 
           slackApi.publishView(botToken, event.user, homeView).catch(() => {});
+        }
+      } else if (
+        event?.type === "app_uninstalled" ||
+        event?.type === "tokens_revoked"
+      ) {
+        const teamId = (payload.team_id as string) ?? "";
+        if (teamId) {
+          const workspace = await workspacesRepo.findBySlackTeamId(teamId);
+          await installationsRepo.deleteBySlackTeam(teamId, "gatekeep");
+          if (workspace) {
+            await kv.deleteByWorkspaceId(workspace.id);
+          }
         }
       }
     }
