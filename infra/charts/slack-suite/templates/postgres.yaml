@@ -7,6 +7,8 @@ metadata:
 data:
   001_init.sql: |
 {{ .Files.Get "files/001_init.sql" | indent 4 }}
+  003_gatekeep.sql: |
+{{ .Files.Get "files/003_gatekeep.sql" | indent 4 }}
 ---
 # StatefulSet garante identidade de rede fixa (postgres-origin-0) e vínculo permanente com o PVC
 apiVersion: apps/v1

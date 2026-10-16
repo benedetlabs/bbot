@@ -31,6 +31,8 @@ secrets:
   todoAppBotToken: ""
   gatekeepAppSigningSecret: ""
   gatekeepAppBotToken: ""
+  gatekeepAppClientId: ""
+  gatekeepAppClientSecret: ""
   gatekeepPublicBaseUrl: "https://gatekeep.bsuit.app"
   cloudflareTunnelToken: ""
   openobserveAdminEmail: "benedetlabs@gmail.com"

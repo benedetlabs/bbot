@@ -17,6 +17,10 @@ locals {
       hostname = "todo.${var.domain_name}"
       service  = "http://todo-app-svc.${local.namespace}.svc.cluster.local:80"
     }
+    gatekeep = {
+      hostname = "gatekeep.${var.domain_name}"
+      service  = "http://gatekeep-app-svc.${local.namespace}.svc.cluster.local:80"
+    }
     signoz = {
       hostname = "signoz.${var.domain_name}"
       service  = "http://signoz.${local.namespace}.svc.cluster.local:8080"

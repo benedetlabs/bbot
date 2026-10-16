@@ -45,6 +45,8 @@ resource "helm_release" "slack_suite" {
         todoAppBotToken        = try(var.projects["todo-app"].bot_token, "")
         gatekeepAppSigningSecret = try(var.projects["gatekeep-app"].signing_secret, "")
         gatekeepAppBotToken      = try(var.projects["gatekeep-app"].bot_token, "")
+        gatekeepAppClientId      = try(var.projects["gatekeep-app"].client_id, "")
+        gatekeepAppClientSecret  = try(var.projects["gatekeep-app"].client_secret, "")
         gatekeepPublicBaseUrl    = try(data.terraform_remote_state.foundation.outputs.public_endpoints["gatekeep"], "https://gatekeep.bsuit.app")
         cloudflareTunnelToken  = data.terraform_remote_state.foundation.outputs.cloudflare_tunnel_token
       }
