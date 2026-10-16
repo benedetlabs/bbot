@@ -1101,17 +1101,163 @@ app.post(
     const rawBody = (c as unknown as { get: (k: string) => string }).get("rawBody");
     const params = new URLSearchParams(rawBody);
     const text = params.get("text")?.trim() ?? "";
+    const teamId = params.get("team_id") ?? "";
+    const userId = params.get("user_id") ?? "U_UNKNOWN";
 
-    if (text === "help") {
+    // 1. /gatekeep new-key [name] or /gatekeep key [name]
+    const keyMatch = text.match(/^(?:new-key|create-key|key)(?:\s+(.+))?$/i);
+    if (keyMatch) {
+      const rawName = keyMatch[1]?.trim() || "cursor-agent";
+      const agentName = rawName.replace(/[^a-zA-Z0-9_\-\.]/g, "-").slice(0, 50);
+
+      const workspace = await workspacesRepo.findBySlackTeamId(teamId);
+      if (!workspace) {
+        return c.json({
+          response_type: "ephemeral",
+          text: "⚠️ Workspace not registered with Gatekeep yet. Please install the app via https://gatekeep.bsuit.app/slack/install",
+        });
+      }
+
+      const keyId = bytesToHex(generateRandomBytes(6));
+      const secret = bytesToHex(generateRandomBytes(16));
+      const secretBytes = new TextEncoder().encode(secret);
+      const keyHash = new Uint8Array(await crypto.subtle.digest("SHA-256", secretBytes));
+      const apiKey = `gk_live_${keyId}_${secret}`;
+
+      await gatekeepRepo.createAgent({
+        workspaceId: workspace.id,
+        name: agentName,
+        keyId,
+        keyHash,
+        environment: "live",
+        allowedActions: ["*"],
+        createdBySlackUserId: userId,
+      });
+
+      const baseUrl = publicBaseUrl();
+      const mcpUrl = `${baseUrl}/mcp`;
+
+      const mcpConfigSnippet = JSON.stringify(
+        {
+          mcpServers: {
+            gatekeep: {
+              url: mcpUrl,
+              headers: {
+                Authorization: `Bearer ${apiKey}`,
+              },
+            },
+          },
+        },
+        null,
+        2,
+      );
+
       return c.json({
         response_type: "ephemeral",
-        text: "🛡️ *Gatekeep Commands:*\n• `/gatekeep status` — View active governance policies and agents.\n• `/gatekeep help` — Show this message.",
+        blocks: [
+          {
+            type: "header",
+            text: {
+              type: "plain_text",
+              text: "🛡️ Gatekeep Agent API Key Generated",
+              emoji: true,
+            },
+          },
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: `Agent *${agentName}* created successfully!\n⚠️ *Copy this key now. It will never be shown again in plaintext:*`,
+            },
+          },
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: `\`\`\`${apiKey}\`\`\``,
+            },
+          },
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: `*Cursor / Windsurf (.cursor/mcp.json):*\n\`\`\`json\n${mcpConfigSnippet}\n\`\`\``,
+            },
+          },
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: `*Claude Code (CLI):*\n\`\`\`bash\nclaude mcp add gatekeep ${mcpUrl} --header "Authorization: Bearer ${apiKey}"\n\`\`\``,
+            },
+          },
+        ],
       });
     }
 
+    // 2. /gatekeep keys or /gatekeep list-keys
+    if (text === "keys" || text === "list-keys") {
+      const workspace = await workspacesRepo.findBySlackTeamId(teamId);
+      if (!workspace) {
+        return c.json({
+          response_type: "ephemeral",
+          text: "⚠️ Workspace not registered with Gatekeep yet.",
+        });
+      }
+
+      const agents = await gatekeepRepo.listAgentsByWorkspace(workspace.id);
+      if (agents.length === 0) {
+        return c.json({
+          response_type: "ephemeral",
+          text: "ℹ️ No agents registered yet. Run `/gatekeep new-key <name>` to create one.",
+        });
+      }
+
+      const agentLines = agents
+        .map(
+          (a) =>
+            `• *${a.name}* (\`${a.key_id}\`) — Status: \`${a.status}\` | Env: \`${a.environment}\` | Last used: ${a.last_used_at ? new Date(a.last_used_at).toISOString() : "Never"}`,
+        )
+        .join("\n");
+
+      return c.json({
+        response_type: "ephemeral",
+        text: `🛡️ *Registered Gatekeep Agents (${agents.length}):*\n${agentLines}`,
+      });
+    }
+
+    // 3. /gatekeep status
+    if (text === "status") {
+      const workspace = await workspacesRepo.findBySlackTeamId(teamId);
+      if (!workspace) {
+        return c.json({
+          response_type: "ephemeral",
+          text: "⚠️ Workspace not registered with Gatekeep yet.",
+        });
+      }
+
+      const agents = await gatekeepRepo.listAgentsByWorkspace(workspace.id);
+      const pending = await gatekeepRepo.getPendingRequestsByWorkspace(workspace.id, 10);
+      const policy = await gatekeepRepo.getActivePolicy(workspace.id);
+
+      return c.json({
+        response_type: "ephemeral",
+        text: `🛡️ *Gatekeep Workspace Status:*\n` +
+          `• Workspace: *${workspace.team_name}* (\`${workspace.slack_team_id}\`)\n` +
+          `• Policy: ${policy ? `Active (v${policy.version}, rules: ${policy.rules.length})` : "Default (v1)"}\n` +
+          `• Active Agents: *${agents.length}*\n` +
+          `• Pending Requests: *${pending.length}*`,
+      });
+    }
+
+    // 4. /gatekeep help or default fallback
     return c.json({
       response_type: "ephemeral",
-      text: "🛡️ Gatekeep is active. Risky AI agent actions will appear here for review.",
+      text: "🛡️ *Gatekeep Commands:*\n" +
+        "• `/gatekeep new-key [name]` — Generate a new Agent API Key and MCP configuration snippet.\n" +
+        "• `/gatekeep keys` — List registered agents and key IDs.\n" +
+        "• `/gatekeep status` — View active governance policies and workspace status.\n" +
+        "• `/gatekeep help` — Show this help message.",
     });
   },
 );

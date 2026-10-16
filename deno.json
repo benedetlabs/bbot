@@ -43,7 +43,8 @@
     "dev:queue": "deno run --allow-net --allow-env --watch apps/queue-app/main.ts",
     "dev:todo": "deno run --allow-net --allow-env --watch apps/todo-app/main.ts",
     "dev:worker": "deno run --allow-net --allow-env --watch apps/outbox-worker/main.ts",
-    "simulate": "deno run --allow-net --allow-env scripts/simulate_slack.ts"
+    "simulate": "deno run --allow-net --allow-env scripts/simulate_slack.ts",
+    "gatekeep:key": "deno run -A scripts/create_agent_key.ts"
   },
   "lint": {
     "rules": {

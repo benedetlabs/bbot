@@ -768,3 +768,100 @@ Deno.test("gatekeep-app: POST /v1/requests/:id/receipt creates follow-up todo on
   assertEquals(failureTodoTitle.includes("Connection timeout to Kubernetes API server"), true);
 });
 
+Deno.test("gatekeep-app: /gatekeep new-key creates agent and returns MCP config snippet", async () => {
+  let createdAgentParams: unknown = null;
+  gatekeepRepo.createAgent = ((params: any) => {
+    createdAgentParams = params;
+    return Promise.resolve({
+      id: "agent-new-001",
+      workspace_id: params.workspaceId,
+      name: params.name,
+      key_id: params.keyId,
+      key_hash: params.keyHash,
+      environment: params.environment,
+      allowed_actions: params.allowedActions,
+      default_on_behalf_of: null,
+      created_by_slack_user_id: params.createdBySlackUserId,
+      status: "active",
+      rate_limit_per_hour: 60,
+      last_used_at: null,
+      created_at: new Date(),
+    });
+  }) as typeof gatekeepRepo.createAgent;
+
+  workspacesRepo.findBySlackTeamId = ((teamId: string) => {
+    return Promise.resolve({
+      id: "ws-mock-123",
+      slack_team_id: teamId,
+      team_name: "Test Corp",
+      slack_enterprise_id: null,
+      installed_at: new Date(),
+    } as any);
+  }) as unknown as typeof workspacesRepo.findBySlackTeamId;
+
+  const commandBody = "command=%2Fgatekeep&text=new-key+cursor-bot&team_id=T_TEST_123&user_id=U_ALICE";
+  const headers = await createSignedHeaders(commandBody);
+
+  const res = await app.request("/slack/commands", {
+    method: "POST",
+    headers,
+    body: commandBody,
+  });
+
+  assertEquals(res.status, 200);
+  const data = await res.json();
+  assertEquals(data.response_type, "ephemeral");
+  assertEquals(Array.isArray(data.blocks), true);
+  assertEquals((createdAgentParams as any).name, "cursor-bot");
+  assertEquals((createdAgentParams as any).workspaceId, "ws-mock-123");
+  assertEquals((createdAgentParams as any).createdBySlackUserId, "U_ALICE");
+
+  // Verify the MCP json snippet is present in the blocks
+  const blocksStr = JSON.stringify(data.blocks);
+  assertEquals(blocksStr.includes("gk_live_"), true);
+  assertEquals(blocksStr.includes("mcpServers"), true);
+  assertEquals(blocksStr.includes("cursor-bot"), true);
+});
+
+Deno.test("gatekeep-app: /gatekeep keys lists registered agents", async () => {
+  gatekeepRepo.listAgentsByWorkspace = (() => {
+    return Promise.resolve([mockAgent]);
+  }) as typeof gatekeepRepo.listAgentsByWorkspace;
+
+  const commandBody = "command=%2Fgatekeep&text=keys&team_id=T_TEST_123&user_id=U_ALICE";
+  const headers = await createSignedHeaders(commandBody);
+
+  const res = await app.request("/slack/commands", {
+    method: "POST",
+    headers,
+    body: commandBody,
+  });
+
+  assertEquals(res.status, 200);
+  const data = await res.json();
+  assertEquals(data.response_type, "ephemeral");
+  assertEquals(data.text.includes("DeployBot"), true);
+  assertEquals(data.text.includes("key123"), true);
+});
+
+Deno.test("gatekeep-app: /gatekeep status returns workspace governance metrics", async () => {
+  gatekeepRepo.listAgentsByWorkspace = (() => Promise.resolve([mockAgent])) as typeof gatekeepRepo.listAgentsByWorkspace;
+  gatekeepRepo.getPendingRequestsByWorkspace = (() => Promise.resolve([])) as typeof gatekeepRepo.getPendingRequestsByWorkspace;
+  gatekeepRepo.getActivePolicy = (() => Promise.resolve(null)) as typeof gatekeepRepo.getActivePolicy;
+
+  const commandBody = "command=%2Fgatekeep&text=status&team_id=T_TEST_123&user_id=U_ALICE";
+  const headers = await createSignedHeaders(commandBody);
+
+  const res = await app.request("/slack/commands", {
+    method: "POST",
+    headers,
+    body: commandBody,
+  });
+
+  assertEquals(res.status, 200);
+  const data = await res.json();
+  assertEquals(data.response_type, "ephemeral");
+  assertEquals(data.text.includes("Test Corp"), true);
+  assertEquals(data.text.includes("Active Agents: *1*"), true);
+});
+
