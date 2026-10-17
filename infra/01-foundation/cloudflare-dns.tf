@@ -5,7 +5,7 @@ resource "cloudflare_record" "tunnel_cnames" {
   for_each = local.tunnel_routes
 
   zone_id = var.cloudflare_zone_id
-  name    = each.key
+  name    = each.key == "root" ? "@" : each.key
   content = "${cloudflare_zero_trust_tunnel_cloudflared.k8s.id}.cfargotunnel.com"
   type    = "CNAME"
   proxied = true

@@ -21,6 +21,14 @@ locals {
       hostname = "gatekeep.${var.domain_name}"
       service  = "http://gatekeep-app-svc.${local.namespace}.svc.cluster.local:80"
     }
+    root = {
+      hostname = var.domain_name
+      service  = "http://gatekeep-app-svc.${local.namespace}.svc.cluster.local:80"
+    }
+    www = {
+      hostname = "www.${var.domain_name}"
+      service  = "http://gatekeep-app-svc.${local.namespace}.svc.cluster.local:80"
+    }
     signoz = {
       hostname = "signoz.${var.domain_name}"
       service  = "http://signoz.${local.namespace}.svc.cluster.local:8080"
