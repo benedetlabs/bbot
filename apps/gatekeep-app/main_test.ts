@@ -455,6 +455,20 @@ Deno.test("gatekeep-app: Public HTML pages render correctly", async () => {
   const rootText = await rootRes.text();
   assertEquals(rootText.includes("Gatekeep"), true);
   assertEquals(rootText.includes("Add to Slack"), true);
+  assertEquals(rootText.includes("Claude Code"), true);
+  assertEquals(rootText.includes("OpenAI Codex"), true);
+  assertEquals(rootText.includes("Hermes Agent"), true);
+  assertEquals(rootText.includes("OpenClaw"), true);
+
+  const docsRes = await app.request("/docs");
+  assertEquals(docsRes.status, 200);
+  const docsText = await docsRes.text();
+  assertEquals(docsText.includes("Human-in-the-Loop Control Plane"), true);
+  assertEquals(docsText.includes("claude mcp add"), true);
+  assertEquals(docsText.includes("mcp_servers.gatekeep"), true);
+  assertEquals(docsText.includes("Hermes Agent"), true);
+  assertEquals(docsText.includes("OpenClaw"), true);
+  assertEquals(docsText.includes("/v1/requests"), true);
 
   const privRes = await app.request("/privacy");
   assertEquals(privRes.status, 200);

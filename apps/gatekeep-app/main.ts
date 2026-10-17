@@ -47,6 +47,7 @@ import {
 } from "@suite/slack-kit";
 import { GatekeepMcpHandler, type McpJsonRpcRequest } from "@suite/gatekeep-mcp";
 import {
+  docsPage,
   installedPage,
   landingPage,
   oauthErrorPage,
@@ -139,6 +140,7 @@ app.get("/healthz", (c) => {
 });
 
 app.get("/", () => html(landingPage()));
+app.get("/docs", () => html(docsPage()));
 app.get("/privacy", () => html(privacyPage()));
 app.get("/support", () => html(supportPage()));
 

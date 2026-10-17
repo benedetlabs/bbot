@@ -37,7 +37,7 @@ const FAVICON_DATA_URI =
 
 const SLACK_LOGO_SVG = `<svg width="20" height="20" viewBox="0 0 122.8 122.8" fill="none" aria-hidden="true"><path d="M25.8 77.6a12.9 12.9 0 1 1-12.9-12.9h12.9v12.9zm6.5 0a12.9 12.9 0 0 1 25.8 0v32.3a12.9 12.9 0 1 1-25.8 0V77.6z" fill="#E01E5A"/><path d="M45.2 25.8a12.9 12.9 0 1 1 12.9-12.9v12.9H45.2zm0 6.5a12.9 12.9 0 0 1 0 25.8H12.9a12.9 12.9 0 1 1 0-25.8h32.3z" fill="#36C5F0"/><path d="M97 45.2a12.9 12.9 0 1 1 12.9 12.9H97V45.2zm-6.5 0a12.9 12.9 0 0 1-25.8 0V12.9a12.9 12.9 0 1 1 25.8 0v32.3z" fill="#2EB67D"/><path d="M77.6 97a12.9 12.9 0 1 1-12.9 12.9V97h12.9zm0-6.5a12.9 12.9 0 0 1 0-25.8h32.3a12.9 12.9 0 1 1 0 25.8H77.6z" fill="#ECB22E"/></svg>`;
 
-function layout(title: string, body: string, isLanding = false): string {
+export function layout(title: string, body: string, isLanding = false): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -603,10 +603,10 @@ function layout(title: string, body: string, isLanding = false): string {
         <span class="brand-badge">bsuit.app</span>
       </a>
       <nav class="main-nav">
-        <a href="/#how-it-works" class="hide-mobile">How it Works</a>
-        <a href="/#quickstart" class="hide-mobile">Quickstart</a>
-        <a href="/#security" class="hide-mobile">Security</a>
+        <a href="/#quickstart" class="hide-mobile">Agents Setup</a>
+        <a href="/#how-it-works" class="hide-mobile">Security</a>
         <a href="/#pricing">Pricing</a>
+        <a href="/docs" style="color:#34d399; font-weight:600;">Docs &amp; API</a>
         <a href="/support" class="hide-mobile">Support</a>
         <a href="/slack/install" class="nav-cta">Add to Slack &rarr;</a>
       </nav>
@@ -633,10 +633,17 @@ function layout(title: string, body: string, isLanding = false): string {
         <div class="footer-links">
           <div class="footer-col">
             <h4>Gatekeep</h4>
-            <a href="/#how-it-works">Architecture</a>
-            <a href="/#quickstart">MCP Setup</a>
+            <a href="/docs">Documentation &amp; API</a>
+            <a href="/#quickstart">Multi-Agent Setup</a>
             <a href="/#pricing">Pricing</a>
             <a href="/slack/install">Install to Slack</a>
+          </div>
+          <div class="footer-col">
+            <h4>Agent Guides</h4>
+            <a href="/docs#claude-code">Claude Code &amp; Desktop</a>
+            <a href="/docs#openai-codex">OpenAI Codex &amp; GPT</a>
+            <a href="/docs#hermes-agent">Hermes Agent</a>
+            <a href="/docs#openclaw">OpenClaw</a>
           </div>
           <div class="footer-col">
             <h4>bsuit Ecosystem</h4>
@@ -671,7 +678,7 @@ export function landingPage(): string {
         Human approval for AI agents — <span class="gradient-text">right in Slack.</span>
       </h1>
       <p class="hero-sub">
-        Stop autonomous agents from running irreversible actions blind. Gatekeep intercepts risky tool calls from <strong>Cursor</strong>, <strong>Claude Code</strong>, LangGraph, and CI/CD, binds their exact JSON parameters to a SHA-256 hash, and requires a 1-click Slack approval before execution.
+        Stop autonomous agents from running irreversible actions blind. Gatekeep intercepts risky tool calls from <strong>Claude Code</strong>, <strong>OpenAI Codex &amp; ChatGPT</strong>, <strong>Cursor</strong>, <strong>Hermes Agent</strong>, and <strong>OpenClaw</strong>, binds their exact JSON parameters to a SHA-256 hash, and requires a 1-click Slack approval before execution.
       </p>
       <div class="hero-actions">
         <a href="/slack/install" class="btn">
@@ -679,9 +686,23 @@ export function landingPage(): string {
           <span>Add to Slack — Free</span>
         </a>
         <a href="#quickstart" class="btn btn-secondary">
-          <span>60-Second MCP Setup &rarr;</span>
+          <span>Connect Your Agent &rarr;</span>
+        </a>
+        <a href="/docs" class="btn btn-secondary" style="border-color:rgba(16, 185, 129, 0.35); color:#34d399;">
+          <span>📖 Full Docs &amp; API Reference</span>
         </a>
       </div>
+
+      <!-- SUPPORTED AGENTS ECOSYSTEM STRIP -->
+      <div style="display:flex; justify-content:center; align-items:center; flex-wrap:wrap; gap:0.55rem; margin-top:1.5rem;">
+        <span style="font-size:0.76rem; color:var(--subtle); font-family:var(--font-mono); text-transform:uppercase; letter-spacing:0.06em; margin-right:0.25rem;">Works out-of-the-box with:</span>
+        <a href="#quickstart" onclick="selectSetupFromHero('claude')" style="background:rgba(15,22,36,0.85); border:1px solid var(--line); border-radius:999px; padding:0.26rem 0.75rem; font-size:0.78rem; color:#f8fafc; text-decoration:none;">🟠 <strong>Claude Code &amp; Desktop</strong></a>
+        <a href="#quickstart" onclick="selectSetupFromHero('codex')" style="background:rgba(15,22,36,0.85); border:1px solid var(--line); border-radius:999px; padding:0.26rem 0.75rem; font-size:0.78rem; color:#f8fafc; text-decoration:none;">🟢 <strong>OpenAI Codex &amp; GPT</strong></a>
+        <a href="#quickstart" onclick="selectSetupFromHero('cursor')" style="background:rgba(15,22,36,0.85); border:1px solid var(--line); border-radius:999px; padding:0.26rem 0.75rem; font-size:0.78rem; color:#f8fafc; text-decoration:none;">🔵 <strong>Cursor &amp; Windsurf</strong></a>
+        <a href="#quickstart" onclick="selectSetupFromHero('hermes')" style="background:rgba(15,22,36,0.85); border:1px solid var(--line); border-radius:999px; padding:0.26rem 0.75rem; font-size:0.78rem; color:#f8fafc; text-decoration:none;">🟣 <strong>Hermes Agent</strong></a>
+        <a href="#quickstart" onclick="selectSetupFromHero('openclaw')" style="background:rgba(15,22,36,0.85); border:1px solid var(--line); border-radius:999px; padding:0.26rem 0.75rem; font-size:0.78rem; color:#f8fafc; text-decoration:none;">🦞 <strong>OpenClaw</strong></a>
+      </div>
+
       <div class="hero-meta">
         Free Sandbox includes 100 governed requests/mo &bull; No SQL or credit card required &bull; Sub-200ms Slack SLA
       </div>
@@ -697,7 +718,7 @@ export function landingPage(): string {
             <span style="font-family:var(--font-mono); font-size:0.78rem; color:var(--muted);">agent-runtime</span>
           </div>
           <div class="tab-group" role="tablist">
-            <button type="button" class="tab-btn active" onclick="switchTab('mcp', this)">MCP (Cursor/Claude)</button>
+            <button type="button" class="tab-btn active" onclick="switchTab('mcp', this)">MCP (Claude/Codex/Cursor)</button>
             <button type="button" class="tab-btn" onclick="switchTab('sdk', this)">TypeScript SDK</button>
             <button type="button" class="tab-btn" onclick="switchTab('curl', this)">REST API</button>
           </div>
@@ -781,7 +802,7 @@ export function landingPage(): string {
                   <span class="slack-app-badge">APP</span>
                   <span style="font-size:0.72rem; color:var(--subtle);">Just now</span>
                 </div>
-                <div style="font-size:0.76rem; color:var(--muted);">Requested by <code>cursor-agent</code> on behalf of <strong>@leonardo</strong></div>
+                <div style="font-size:0.76rem; color:var(--muted);">Requested by <code>claude-code</code> on behalf of <strong>@leonardo</strong></div>
               </div>
             </div>
 
@@ -830,12 +851,12 @@ export function landingPage(): string {
       </div>
     </section>
 
-    <!-- 60-SECOND QUICKSTART (ZERO DB) -->
+    <!-- 60-SECOND MULTI-AGENT QUICKSTART HUB -->
     <section id="quickstart">
       <div class="section-header">
-        <div class="section-eyebrow">Zero-Database Onboarding</div>
-        <h2>Live in Cursor or Claude Code in 60 seconds</h2>
-        <p>No SQL queries or complex dashboards needed. Generate your scoped Agent API Key directly from Slack.</p>
+        <div class="section-eyebrow">Universal Agent Onboarding</div>
+        <h2>Connect Claude Code, OpenAI Codex, Cursor, Hermes or OpenClaw in 60s</h2>
+        <p>Generate your scoped <code>gk_live_...</code> key directly inside Slack with <code>/gatekeep new-key</code>—zero SQL queries required—and plug it into any agent runtime.</p>
       </div>
 
       <div class="grid-3">
@@ -847,21 +868,89 @@ export function landingPage(): string {
         <div class="feature-card">
           <div class="feature-icon">2</div>
           <h3>Run <code>/gatekeep new-key</code></h3>
-          <p style="font-size:0.9rem;">In any Slack channel, run <code>/gatekeep new-key cursor</code>. Gatekeep replies privately with your <code>gk_live_...</code> key and ready-to-paste JSON.</p>
+          <p style="font-size:0.9rem;">In any Slack channel, run <code>/gatekeep new-key claude</code> (or <code>codex</code>, <code>hermes</code>, <code>openclaw</code>). Gatekeep replies privately with your key.</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon">3</div>
-          <h3>Connect via Remote MCP</h3>
-          <p style="font-size:0.9rem;">Drop the snippet into <code>.cursor/mcp.json</code> or run <code>claude mcp add</code>. Your agent now asks Slack before risky actions.</p>
+          <h3>Pick Your Agent Below</h3>
+          <p style="font-size:0.9rem;">Copy the configuration for your agent runtime below or explore the <a href="/docs">Full Documentation &amp; API Reference</a>.</p>
         </div>
       </div>
 
-      <div class="card" style="margin-top:1.5rem;">
-        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
-          <strong style="font-size:0.92rem; color:var(--ink);">📁 <code>.cursor/mcp.json</code> — Remote Streamable HTTP MCP (Zero Local Dependencies)</strong>
-          <span style="font-family:var(--font-mono); font-size:0.75rem; color:var(--emerald);">Endpoint: https://gatekeep.bsuit.app/mcp</span>
+      <!-- MULTI-AGENT INTERACTIVE SETUP SWITCHER -->
+      <div class="pane" style="margin-top:1.75rem;">
+        <div class="pane-header" style="flex-wrap:wrap; gap:0.6rem;">
+          <div class="tab-group" role="tablist" style="flex-wrap:wrap;" id="setup-tabs">
+            <button type="button" class="tab-btn active" id="tab-setup-claude" onclick="switchAgentSetup('claude', this)">🟠 Claude Code</button>
+            <button type="button" class="tab-btn" id="tab-setup-codex" onclick="switchAgentSetup('codex', this)">🟢 OpenAI Codex / GPT</button>
+            <button type="button" class="tab-btn" id="tab-setup-cursor" onclick="switchAgentSetup('cursor', this)">🔵 Cursor / Windsurf</button>
+            <button type="button" class="tab-btn" id="tab-setup-hermes" onclick="switchAgentSetup('hermes', this)">🟣 Hermes Agent</button>
+            <button type="button" class="tab-btn" id="tab-setup-openclaw" onclick="switchAgentSetup('openclaw', this)">🦞 OpenClaw</button>
+            <button type="button" class="tab-btn" id="tab-setup-python" onclick="switchAgentSetup('python', this)">🐍 Python / REST</button>
+          </div>
+          <div style="display:flex; align-items:center; gap:0.65rem;">
+            <span style="font-family:var(--font-mono); font-size:0.74rem; color:var(--emerald);">https://gatekeep.bsuit.app/mcp</span>
+            <button type="button" class="tab-btn" id="copy-setup-btn" onclick="copyActiveSetup()" style="border-color:var(--line); color:#e2e8f0;">Copy Snippet</button>
+          </div>
         </div>
-        <pre><code>{
+
+        <div class="pane-body">
+          <!-- CLAUDE CODE -->
+          <div id="setup-claude" class="setup-panel">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem; flex-wrap:wrap;">
+              <strong style="font-size:0.9rem; color:#f8fafc;">🟠 Claude Code CLI &amp; <code>.mcp.json</code> (Anthropic Native HTTP MCP)</strong>
+              <a href="/docs#claude-code" style="font-size:0.8rem;">Full Claude Guide &rarr;</a>
+            </div>
+            <pre style="margin:0;"><code># Option 1: One-liner in Claude Code CLI
+claude mcp add --transport http gatekeep https://gatekeep.bsuit.app/mcp \\
+  --header "Authorization: Bearer gk_live_your_key_id_secret"
+
+# Option 2: Project .mcp.json (or claude_desktop_config.json)
+{
+  "mcpServers": {
+    "gatekeep": {
+      "type": "http",
+      "url": "https://gatekeep.bsuit.app/mcp",
+      "headers": {
+        "Authorization": "Bearer gk_live_your_key_id_secret"
+      }
+    }
+  }
+}</code></pre>
+          </div>
+
+          <!-- OPENAI CODEX & GPT -->
+          <div id="setup-codex" class="setup-panel" style="display:none;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem; flex-wrap:wrap;">
+              <strong style="font-size:0.9rem; color:#f8fafc;">🟢 OpenAI Codex CLI (<code>~/.codex/config.toml</code>) &amp; OpenAI Responses API (GPT-4.1 / o3 / GPT-5)</strong>
+              <a href="/docs#openai-codex" style="font-size:0.8rem;">Full OpenAI / Codex Guide &rarr;</a>
+            </div>
+            <pre style="margin:0;"><code># 1. OpenAI Codex CLI (~/.codex/config.toml)
+[mcp_servers.gatekeep]
+url = "https://gatekeep.bsuit.app/mcp"
+http_headers = { Authorization = "Bearer gk_live_your_key_id_secret" }
+
+# 2. OpenAI Responses API (Native Remote MCP Connector)
+const response = await openai.responses.create({
+  model: "gpt-4.1",
+  tools: [{
+    type: "mcp",
+    server_label: "gatekeep",
+    server_url: "https://gatekeep.bsuit.app/mcp",
+    headers: { Authorization: "Bearer gk_live_your_key_id_secret" },
+    require_approval: "never" // Gatekeep enforces approval in Slack
+  }],
+  input: "Request Slack approval via Gatekeep before deploying prod-api"
+});</code></pre>
+          </div>
+
+          <!-- CURSOR & WINDSURF -->
+          <div id="setup-cursor" class="setup-panel" style="display:none;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem; flex-wrap:wrap;">
+              <strong style="font-size:0.9rem; color:#f8fafc;">🔵 Cursor (<code>.cursor/mcp.json</code>) &amp; Windsurf IDE</strong>
+              <a href="/docs#cursor-windsurf" style="font-size:0.8rem;">Full Cursor &amp; Windsurf Guide &rarr;</a>
+            </div>
+            <pre style="margin:0;"><code>{
   "mcpServers": {
     "gatekeep": {
       "url": "https://gatekeep.bsuit.app/mcp",
@@ -871,6 +960,72 @@ export function landingPage(): string {
     }
   }
 }</code></pre>
+          </div>
+
+          <!-- HERMES AGENT -->
+          <div id="setup-hermes" class="setup-panel" style="display:none;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem; flex-wrap:wrap;">
+              <strong style="font-size:0.9rem; color:#f8fafc;">🟣 Hermes Agent by Nous Research (<code>~/.hermes/config.yaml</code>)</strong>
+              <a href="/docs#hermes-agent" style="font-size:0.8rem;">Full Hermes Agent Guide &rarr;</a>
+            </div>
+            <pre style="margin:0;"><code># ~/.hermes/config.yaml
+mcp_servers:
+  gatekeep:
+    transport: http
+    url: "https://gatekeep.bsuit.app/mcp"
+    headers:
+      Authorization: "Bearer gk_live_your_key_id_secret"
+    timeout: 60</code></pre>
+          </div>
+
+          <!-- OPENCLAW -->
+          <div id="setup-openclaw" class="setup-panel" style="display:none;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem; flex-wrap:wrap;">
+              <strong style="font-size:0.9rem; color:#f8fafc;">🦞 OpenClaw Autonomous Agent (<code>~/.openclaw/openclaw.json</code>)</strong>
+              <a href="/docs#openclaw" style="font-size:0.8rem;">Full OpenClaw Guide &rarr;</a>
+            </div>
+            <pre style="margin:0;"><code>// ~/.openclaw/openclaw.json
+{
+  "mcpServers": {
+    "gatekeep": {
+      "type": "streamable-http",
+      "url": "https://gatekeep.bsuit.app/mcp",
+      "headers": {
+        "Authorization": "Bearer gk_live_your_key_id_secret"
+      }
+    }
+  }
+}</code></pre>
+          </div>
+
+          <!-- PYTHON / REST -->
+          <div id="setup-python" class="setup-panel" style="display:none;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem; flex-wrap:wrap;">
+              <strong style="font-size:0.9rem; color:#f8fafc;">🐍 Python, LangGraph, CrewAI &amp; Any HTTP Runtime</strong>
+              <a href="/docs#rest-api" style="font-size:0.8rem;">Full REST API Reference &rarr;</a>
+            </div>
+            <pre style="margin:0;"><code>import httpx
+
+res = httpx.post(
+    "https://gatekeep.bsuit.app/v1/requests",
+    headers={"Authorization": "Bearer gk_live_your_key_id_secret"},
+    json={
+        "action": "db.migration.apply",
+        "target": "postgres:prod",
+        "params": {"migration": "004_users.sql"},
+        "justification": "Apply production schema update",
+    },
+).json()
+
+# Poll with server-side long-polling (?wait=25) until approved in Slack
+decision = httpx.get(f"{res['poll_url']}?wait=25", headers={"Authorization": "Bearer gk_live_..."}).json()</code></pre>
+          </div>
+
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem; margin-top:1.1rem; padding-top:0.9rem; border-top:1px solid var(--line);">
+            <span style="font-size:0.82rem; color:var(--muted);">Need OpenAPI 3.1 schemas for ChatGPT Actions, webhook verification, or JCS hash details?</span>
+            <a href="/docs" class="btn btn-secondary" style="padding:0.45rem 1rem; font-size:0.84rem;">Explore Product &amp; API Documentation (/docs) &rarr;</a>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -993,6 +1148,40 @@ export function landingPage(): string {
         var buttons = btn.parentElement.querySelectorAll('.tab-btn');
         for (var i = 0; i < buttons.length; i++) buttons[i].classList.remove('active');
         btn.classList.add('active');
+      }
+
+      var currentSetupAgent = 'claude';
+      function switchAgentSetup(agent, btn) {
+        currentSetupAgent = agent;
+        var agents = ['claude', 'codex', 'cursor', 'hermes', 'openclaw', 'python'];
+        for (var i = 0; i < agents.length; i++) {
+          var el = document.getElementById('setup-' + agents[i]);
+          if (el) el.style.display = agents[i] === agent ? 'block' : 'none';
+        }
+        var tabs = document.getElementById('setup-tabs').querySelectorAll('.tab-btn');
+        for (var j = 0; j < tabs.length; j++) tabs[j].classList.remove('active');
+        if (btn) btn.classList.add('active');
+      }
+
+      function selectSetupFromHero(agent) {
+        var btn = document.getElementById('tab-setup-' + agent);
+        switchAgentSetup(agent, btn);
+      }
+
+      function copyActiveSetup() {
+        var panel = document.getElementById('setup-' + currentSetupAgent);
+        if (!panel) return;
+        var pre = panel.querySelector('pre');
+        if (!pre) return;
+        var btn = document.getElementById('copy-setup-btn');
+        navigator.clipboard.writeText(pre.innerText || pre.textContent).then(function() {
+          btn.textContent = 'Copied ✓';
+          btn.style.color = '#34d399';
+          setTimeout(function() {
+            btn.textContent = 'Copy Snippet';
+            btn.style.color = '#e2e8f0';
+          }, 1800);
+        });
       }
 
       function triggerDemo(action) {
@@ -1161,3 +1350,6 @@ export function oauthErrorPage(message: string): string {
     <p><a href="/slack/install" class="btn">Retry Installation</a></p>`,
   );
 }
+
+export { docsPage } from "./docs.ts";
+
