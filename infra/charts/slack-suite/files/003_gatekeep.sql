@@ -40,7 +40,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_gk_policy_active
 -- 3. Requests (cabeçalho + estado)
 CREATE TABLE IF NOT EXISTS gatekeep_requests (
     id UUID PRIMARY KEY DEFAULT uuidv7(),
-    public_id VARCHAR(40) NOT NULL UNIQUE,            -- gk_req_<ulid/uuid>
+    public_id VARCHAR(64) NOT NULL UNIQUE,            -- gk_req_<ulid/uuid>
     workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
     agent_id UUID NOT NULL REFERENCES gatekeep_agents(id),
     idempotency_key VARCHAR(128),
@@ -87,7 +87,7 @@ CREATE TABLE IF NOT EXISTS gatekeep_request_revisions (
     preview_enc BYTEA,
     preview_hash VARCHAR(64),
     secret_refs TEXT[] NOT NULL DEFAULT '{}',
-    created_by VARCHAR(40) NOT NULL,                  -- 'agent:<id>' | 'slack:<user_id>'
+    created_by VARCHAR(128) NOT NULL,                 -- 'agent:<id>' | 'slack:<user_id>'
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (request_id, revision)
 );
@@ -166,13 +166,12 @@ CREATE TABLE IF NOT EXISTS gatekeep_audit_events (
     workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
     seq BIGINT NOT NULL,
     request_id UUID,
-    actor VARCHAR(48) NOT NULL,                       -- 'agent:<id>' | 'slack:<user>' | 'policy' | 'system'
+    actor VARCHAR(128) NOT NULL,                      -- 'agent:<id>' | 'slack:<user>' | 'policy' | 'system'
     event_type VARCHAR(48) NOT NULL,                  -- request.created, decision.approve, token.consumed…
     data JSONB NOT NULL,                              -- só metadados + hashes (sem params em claro)
     prev_hash BYTEA,
     row_hash BYTEA NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (workspace_id, seq)
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- 11. Integração com Queue e Secret Audit
