@@ -23,6 +23,9 @@ spec:
               app: todo-app
         - podSelector:
             matchLabels:
+              app: gatekeep-app
+        - podSelector:
+            matchLabels:
               app: outbox-worker
         - podSelector:
             matchLabels:

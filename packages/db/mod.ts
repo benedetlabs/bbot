@@ -47,6 +47,8 @@ export function getSqlWrite(): Sql {
     sqlWriteInstance = postgres(originUrl, {
       max: 20,
       idle_timeout: 30,
+      connect_timeout: 5,
+      max_lifetime: 1800,
       prepare: true,
       onnotice: () => {}, // Suppress noisy PG notices
     });
@@ -65,6 +67,8 @@ export function getSqlRead(): Sql {
       sqlReadInstance = postgres(pgcacheUrl, {
         max: 30,
         idle_timeout: 30,
+        connect_timeout: 5,
+        max_lifetime: 1800,
         prepare: true,
         onnotice: () => {},
       });
